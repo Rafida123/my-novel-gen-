@@ -17,6 +17,7 @@ import {
   getAiSuggestions, 
   chatWithConsultant 
 } from './services/geminiService';
+import * as db from './services/dbService';
 
 const genreOptions = ['Straight Romance', 'Yaoi (B×B)', 'Lesbian (G×G)', 'BDSM / Kink', 'Dark Romance', 'Fantasy Romance', 'Sci-Fi Romance', 'Reverse Harem', 'Omegaverse'];
 const atmosphereOptions = {
@@ -40,7 +41,7 @@ const kinkPresets = [
   'Oral Sex', 'Cunnilingus', 'BDSM', 'Impact Play', 'Exhibitionism', 'Praise/Degradation', 'Overstimulation', 'Mirror Play', 'Wax Play', 'Edge Play', 'Breath Play', 'Roleplay', 'Consensual Non-Consent'
 ];
 
-const STORAGE_KEY = 'novlgen_architect_archive';
+const LEGACY_STORAGE_KEY = 'novlgen_architect_archive';
 
 type SortOption = 'newest' | 'oldest' | 'title-az' | 'title-za';
 
@@ -95,17 +96,32 @@ const App: React.FC = () => {
     aiSuggestions: {} 
   });
 
-  // --- INITIALIZATION ---
+  // --- INITIALIZATION & MIGRATION ---
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
+    const initializeStorage = async () => {
       try {
-        const parsed = JSON.parse(saved);
-        setArchive(parsed);
+        // 1. Check for legacy data
+        const legacyData = localStorage.getItem(LEGACY_STORAGE_KEY);
+        if (legacyData) {
+          const parsed: Novel[] = JSON.parse(legacyData);
+          // Migrate to IndexedDB
+          for (const n of parsed) {
+            await db.saveNovel(n);
+          }
+          // Clear legacy storage to prevent re-migration
+          localStorage.removeItem(LEGACY_STORAGE_KEY);
+          console.log("Migration from localStorage to IndexedDB complete.");
+        }
+
+        // 2. Load from IndexedDB
+        const storedNovels = await db.getAllNovels();
+        setArchive(storedNovels);
       } catch (e) {
-        console.error("Failed to parse archive", e);
+        console.error("Storage initialization failed", e);
       }
-    }
+    };
+
+    initializeStorage();
   }, []);
 
   // --- COMPUTED ARCHIVE ---
@@ -141,23 +157,29 @@ const App: React.FC = () => {
   }, [archive, searchTerm, filterGenre, sortBy]);
 
   // --- PERSISTENCE HELPERS ---
-  const saveToArchive = (updatedNovel: Novel) => {
-    setArchive(prev => {
-      const filtered = prev.filter(n => n.id !== updatedNovel.id);
-      const newArchive = [updatedNovel, ...filtered];
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newArchive));
-      return newArchive;
-    });
+  const saveToArchive = async (updatedNovel: Novel) => {
+    try {
+      await db.saveNovel(updatedNovel);
+      setArchive(prev => {
+        const filtered = prev.filter(n => n.id !== updatedNovel.id);
+        return [updatedNovel, ...filtered];
+      });
+    } catch (e) {
+      console.error("Failed to save to database", e);
+      alert("Error saving manuscript.");
+    }
   };
 
-  const deleteFromArchive = (id: string, e?: React.MouseEvent) => {
+  const deleteFromArchive = async (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (!confirm("Are you sure you want to delete this manuscript?")) return;
-    setArchive(prev => {
-      const newArchive = prev.filter(n => n.id !== id);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newArchive));
-      return newArchive;
-    });
+    try {
+      await db.deleteNovel(id);
+      setArchive(prev => prev.filter(n => n.id !== id));
+    } catch (e) {
+      console.error("Failed to delete from database", e);
+      alert("Error deleting manuscript.");
+    }
   };
 
   const startNewProject = () => {
@@ -203,7 +225,7 @@ const App: React.FC = () => {
         title: data.outline[0] || novel.title
       };
       setNovel(updated);
-      saveToArchive(updated);
+      await saveToArchive(updated);
     } catch (err) {
       console.error(err);
       alert("Failed to map the narrative. Check your API key.");
@@ -245,11 +267,10 @@ const App: React.FC = () => {
       };
       
       setNovel(updatedNovel);
-      saveToArchive(updatedNovel);
+      await saveToArchive(updatedNovel);
       setActiveChapter(index);
       setStep('write');
       setCustomDirective("");
-      // Don't clear blueprint automatically so user can tweak it for regen
     } catch (err) {
       console.error(err);
       alert("Generation failed.");
@@ -899,7 +920,7 @@ const App: React.FC = () => {
       {/* SYNC FOOTER */}
       <footer className="bg-white/80 backdrop-blur-md border-t px-8 py-3 text-[9px] font-[900] text-slate-300 uppercase tracking-[0.4em] flex justify-between items-center z-50">
         <div className="flex gap-12">
-          <div className="flex items-center gap-2"><div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-sm" /> ARCHIVE SECURED</div>
+          <div className="flex items-center gap-2"><div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-sm" /> ARCHIVE SECURED (IDB)</div>
           <div className="hidden md:block">LOC: {activeChapter + 1} / 12 CHAPTERS</div>
           <div className="hidden lg:block text-slate-200 uppercase tracking-widest">{novel.id.slice(0, 8)} • MANUSCRIPT ID</div>
         </div>
