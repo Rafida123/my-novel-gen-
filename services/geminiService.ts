@@ -2,11 +2,24 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
 const getAI = () => {
-  // Resilient API key lookup for both Node and Browser environments
-  const apiKey = (window as any).process?.env?.API_KEY || (typeof process !== 'undefined' ? process.env.API_KEY : '');
+  // Ultra-safe lookup to prevent "Process is not defined" crashes
+  let apiKey = "";
+  
+  try {
+    // Check global window shim first
+    if (typeof window !== 'undefined' && (window as any).process?.env?.API_KEY) {
+      apiKey = (window as any).process.env.API_KEY;
+    } 
+    // Check standard process env (works if injected by build tool)
+    else if (typeof process !== 'undefined' && process.env?.API_KEY) {
+      apiKey = process.env.API_KEY;
+    }
+  } catch (e) {
+    console.error("Error accessing environment variables:", e);
+  }
   
   if (!apiKey) {
-    console.warn("Gemini API Key is missing. Ensure API_KEY is set in Netlify Environment Variables.");
+    console.error("CRITICAL: Gemini API Key is missing. The app will not function correctly. Ensure API_KEY is set in your environment.");
   }
   
   return new GoogleGenAI({ apiKey: apiKey || "" });
