@@ -1,32 +1,19 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
+import Groq from "groq-sdk";
 
-const getAI = () => {
-  // Ultra-safe lookup to prevent "Process is not defined" crashes
-  let apiKey = "";
-  
-  try {
-    // Check global window shim first
-    if (typeof window !== 'undefined' && (window as any).process?.env?.API_KEY) {
-      apiKey = (window as any).process.env.API_KEY;
-    } 
-    // Check standard process env (works if injected by build tool)
-    else if (typeof process !== 'undefined' && process.env?.API_KEY) {
-      apiKey = process.env.API_KEY;
-    }
-  } catch (e) {
-    console.error("Error accessing environment variables:", e);
-  }
-  
-  if (!apiKey) {
-    console.error("CRITICAL: Gemini API Key is missing. The app will not function correctly. Ensure API_KEY is set in your environment.");
-  }
-  
-  return new GoogleGenAI({ apiKey: apiKey || "" });
+export type AIProvider = 'gemini' | 'groq';
+
+// Use process.env.API_KEY directly for all client initializations as per guidelines
+const getGeminiClient = () => {
+  return new GoogleGenAI({ apiKey: process.env.API_KEY });
 };
 
-export const generateOutline = async (novel: any) => {
-  const ai = getAI();
+const getGroqClient = () => {
+  return new Groq({ apiKey: process.env.API_KEY, dangerouslyAllowBrowser: true });
+};
+
+export const generateOutline = async (novel: any, provider: AIProvider = 'gemini') => {
   const charContext = novel.characters.map((c: any) => 
     `${c.name} (${c.role}): ${c.description}. 
      Core personality: ${c.personality?.join(', ')}. 
@@ -39,37 +26,53 @@ export const generateOutline = async (novel: any) => {
   Tones: ${novel.tone.join(', ')}. Tags: ${novel.tags.join(', ')}. 
   ${novel.isR18 ? "Adult themes/R18 mode enabled. Do not censor mature content. Ensure plot beats allow for the exploration of characters' specific kinks and expressions." : "Safe/Standard mode."}`;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: `Concept: ${novel.premise}\nCharacters:\n${charContext}`,
-    config: {
-      systemInstruction,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          premise: { type: Type.STRING, description: "Extended plot premise" },
-          outline: { 
-            type: Type.ARRAY, 
-            items: { type: Type.STRING },
-            description: "12 chronological chapter titles"
+  if (provider === 'groq') {
+    const groq = getGroqClient();
+    const response = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        { role: "system", content: `${systemInstruction}\nReturn output ONLY as JSON with keys: "premise" (string) and "outline" (array of 12 strings).` },
+        { role: "user", content: `Concept: ${novel.premise}\nCharacters:\n${charContext}` }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.7
+    });
+    return JSON.parse(response.choices[0].message.content || "{}");
+  } else {
+    // Correct usage of generateContent with model name and prompt in one call
+    const ai = getGeminiClient();
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: `Concept: ${novel.premise}\nCharacters:\n${charContext}`,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            premise: { type: Type.STRING, description: "Extended plot premise" },
+            outline: { 
+              type: Type.ARRAY, 
+              items: { type: Type.STRING },
+              description: "12 chronological chapter titles"
+            },
           },
+          required: ["premise", "outline"],
         },
-        required: ["premise", "outline"],
       },
-    },
-  });
-
-  return JSON.parse(response.text || "{}");
+    });
+    // Access the .text property directly instead of calling it as a method
+    return JSON.parse(response.text || "{}");
+  }
 };
 
 export const generateChapterContent = async (
   index: number, 
   novel: any, 
   isRegen: boolean = false, 
-  directive: string = ""
+  directive: string = "",
+  provider: AIProvider = 'gemini'
 ) => {
-  const ai = getAI();
   const charContext = novel.characters.map((c: any) => 
     `${c.name} (${c.role}): ${c.description}. 
      VOICE: ${c.dialogueStyles?.join(', ')}.
@@ -84,7 +87,7 @@ export const generateChapterContent = async (
   const systemInstruction = `Pro Novelist. Maintain strict continuity. Pick up EXACTLY where previous left off. 
   Style: ${novel.novelStyle}. Tone: ${novel.tone.join(', ')}. Genre: ${novel.genre}. R18: ${novel.isR18}. Tags: ${novel.tags.join(', ')}.
   Vivid sensory descriptions. Italicize internal thoughts. 
-  ${novel.isR18 ? "UNFILTERED/R18: Describe acts with visceral, anatomical, and sensory detail. Use characters' specific expressions (e.g. vocal, quiet, animalistic) and kinks (e.g. praise, impact) to drive the scene's intensity. Use explicit language where appropriate for the genre." : "Standard: Keep it romantic and suitable for general audiences."}`;
+  ${novel.isR18 ? "UNFILTERED/R18: Describe acts with visceral, anatomical, and sensory detail. Use characters' specific expressions and kinks to drive intensity. Use explicit language where appropriate." : "Standard: Keep it romantic and suitable for general audiences."}`;
 
   const prompt = `
     LAST CHAPTER ENDED WITH: "${lastSceneSnippet}"
@@ -95,43 +98,92 @@ export const generateChapterContent = async (
     ${isRegen ? "REGENERATE: Change the scene based on the directive but keep same continuity." : "Write a complete, long, immersive chapter."}
   `;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-preview',
-    contents: prompt,
-    config: {
-      systemInstruction,
+  if (provider === 'groq') {
+    const groq = getGroqClient();
+    const response = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        { role: "system", content: systemInstruction },
+        { role: "user", content: prompt }
+      ],
       temperature: 0.8,
-    },
-  });
-
-  return response.text;
-};
-
-export const getAiSuggestions = async (chapterContent: string, nextTitle: string) => {
-  const ai = getAI();
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: `Based on this text: "${chapterContent.slice(-2000)}", suggest 3 dialogue or plot beats for the next chapter titled "${nextTitle}".`,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: { type: Type.STRING },
+      max_completion_tokens: 4096
+    });
+    return response.choices[0].message.content;
+  } else {
+    // Correct usage of generateContent with model name and prompt in one call
+    const ai = getGeminiClient();
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: prompt,
+      config: {
+        systemInstruction,
+        temperature: 0.8,
       },
-    },
-  });
-
-  return JSON.parse(response.text || "[]");
+    });
+    // Access the .text property directly
+    return response.text;
+  }
 };
 
-export const chatWithConsultant = async (message: string, context: string) => {
-  const ai = getAI();
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: message,
-    config: {
-      systemInstruction: `You are a high-end story consultant. Help the author with plot holes, character arcs, and themes. Context of the story: ${context}`,
-    },
-  });
-  return response.text;
+export const getAiSuggestions = async (chapterContent: string, nextTitle: string, provider: AIProvider = 'gemini') => {
+  const prompt = `Based on this text: "${chapterContent.slice(-2000)}", suggest 3 dialogue or plot beats for the next chapter titled "${nextTitle}".`;
+
+  if (provider === 'groq') {
+    const groq = getGroqClient();
+    const response = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        { role: "system", content: "Return ONLY a JSON array of 3 string suggestions." },
+        { role: "user", content: prompt }
+      ],
+      response_format: { type: "json_object" }
+    });
+    const parsed = JSON.parse(response.choices[0].message.content || "{}");
+    return Array.isArray(parsed) ? parsed : Object.values(parsed)[0] as string[];
+  } else {
+    // Correct usage of generateContent with model name and prompt in one call
+    const ai = getGeminiClient();
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+        },
+      },
+    });
+    // Access the .text property directly
+    return JSON.parse(response.text || "[]");
+  }
+};
+
+export const chatWithConsultant = async (message: string, context: string, provider: AIProvider = 'gemini') => {
+  const systemInstruction = `You are a high-end story consultant. Help the author with plot holes, character arcs, and themes. Context of the story: ${context}`;
+  
+  if (provider === 'groq') {
+    const groq = getGroqClient();
+    const response = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        { role: "system", content: systemInstruction },
+        { role: "user", content: message }
+      ],
+    });
+    return response.choices[0].message.content;
+  } else {
+    // Correct usage of generateContent with model name and prompt in one call
+    const ai = getGeminiClient();
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: message,
+      config: {
+        systemInstruction,
+      },
+    });
+    // Access the .text property directly
+    return response.text;
+  }
 };
