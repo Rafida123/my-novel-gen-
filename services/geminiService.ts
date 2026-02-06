@@ -1,7 +1,16 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+const getAI = () => {
+  // Resilient API key lookup for both Node and Browser environments
+  const apiKey = (window as any).process?.env?.API_KEY || (typeof process !== 'undefined' ? process.env.API_KEY : '');
+  
+  if (!apiKey) {
+    console.warn("Gemini API Key is missing. Ensure API_KEY is set in Netlify Environment Variables.");
+  }
+  
+  return new GoogleGenAI({ apiKey: apiKey || "" });
+};
 
 export const generateOutline = async (novel: any) => {
   const ai = getAI();

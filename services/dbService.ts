@@ -1,5 +1,5 @@
 
-import { Novel } from "../types";
+import { Novel } from "../types.ts";
 
 const DB_NAME = "NovlGenArchitectDB";
 const STORE_NAME = "novels";

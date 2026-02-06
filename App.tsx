@@ -10,14 +10,14 @@ import {
   HandMetal, Check, Search, ArrowUpDown, Filter, Activity, Layers,
   Scissors, ZapOff, Timer
 } from 'lucide-react';
-import { Novel, AppStep, ChatMessage, Character } from './types';
+import { Novel, AppStep, ChatMessage, Character } from './types.ts';
 import { 
   generateOutline, 
   generateChapterContent, 
   getAiSuggestions, 
   chatWithConsultant 
-} from './services/geminiService';
-import * as db from './services/dbService';
+} from './services/geminiService.ts';
+import * as db from './services/dbService.ts';
 
 const genreOptions = ['Straight Romance', 'Yaoi (B×B)', 'Lesbian (G×G)', 'BDSM / Kink', 'Dark Romance', 'Fantasy Romance', 'Sci-Fi Romance', 'Reverse Harem', 'Omegaverse'];
 const atmosphereOptions = {
