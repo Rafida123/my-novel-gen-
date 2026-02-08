@@ -23,11 +23,14 @@ const getGeminiClient = () => {
 };
 
 const getGroqClient = () => {
-  // Relying solely on environment variables to prevent security-based sync blocks from GitHub
+  // Relying solely on environment variables to prevent security-based sync blocks from GitHub.
+  // Make sure to add GROQ_API_KEY to your .env file or deployment settings.
   const apiKey = process.env.GROQ_API_KEY;
+  
   if (!apiKey) {
-    console.warn("GROQ_API_KEY is missing from environment variables.");
+    console.error("CRITICAL: GROQ_API_KEY is missing from environment.");
   }
+
   return new Groq({ 
     apiKey: apiKey || "", 
     dangerouslyAllowBrowser: true 
