@@ -1,7 +1,24 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { Groq } from "groq-sdk";
+import Groq from "groq-sdk";
 
 export type AIProviderType = 'gemini' | 'groq';
+
+/**
+ * Utility to clean AI responses that might be wrapped in markdown code blocks.
+ * Safely handles strings that aren't wrapped at all or have conversational pre-text.
+ */
+const cleanJson = (str: string): string => {
+  if (!str) return "{}";
+  // Remove markdown blocks if they exist
+  const cleaned = str.replace(/```json\n?/, '').replace(/\n?```/, '').trim();
+  // Find the first '{' and last '}' to isolate the JSON object if the model was chatty
+  const firstBracket = cleaned.indexOf('{');
+  const lastBracket = cleaned.lastIndexOf('}');
+  if (firstBracket !== -1 && lastBracket !== -1) {
+    return cleaned.substring(firstBracket, lastBracket + 1);
+  }
+  return cleaned;
+};
 
 /**
  * Interface defining the expected behavior for any AI model adapter.
@@ -15,25 +32,33 @@ export interface AIProvider {
 }
 
 /**
- * Helper to get API keys.
- * Prioritizes:
- * 1. Environment Variable (Vite/Platform injected)
- * 2. LocalStorage (User entered in UI)
+ * Helper to get API keys from env or localStorage.
+ * Highly defensive against stringified "undefined" or "null" values.
  */
 export const getApiKeyForProvider = (type: AIProviderType): string => {
   if (type === 'groq') {
-    const envKey = process.env.GROQ_API_KEY;
-    if (envKey && envKey !== 'undefined' && envKey.length > 10) return envKey;
-
+    // Priority 1: Local Storage (User configured)
     if (typeof localStorage !== 'undefined') {
       const localKey = localStorage.getItem('GROQ_API_KEY');
-      if (localKey) return localKey;
+      if (localKey && localKey !== 'undefined' && localKey !== 'null' && localKey.trim().length > 10) {
+        return localKey.trim();
+      }
+    }
+
+    // Priority 2: Environment Variables (Vite/Process shim)
+    const envKey = process.env.GROQ_API_KEY;
+    if (envKey && envKey !== 'undefined' && envKey !== 'null' && envKey.trim().length > 10) {
+      return envKey.trim();
     }
     return '';
   }
   
-  // Gemini key is strictly injected via process.env.API_KEY in the execution environment
-  return process.env.API_KEY || '';
+  // Gemini Keys
+  const geminiKey = process.env.API_KEY;
+  if (geminiKey && geminiKey !== 'undefined' && geminiKey !== 'null' && geminiKey.trim().length > 10) {
+    return geminiKey.trim();
+  }
+  return '';
 };
 
 /**
@@ -53,6 +78,10 @@ class GeminiAdapter implements AIProvider {
     const prompt = `Act as a Master Story Architect. Generate a professional blurb and a 12-20 chapter outline.
 Title: ${novel.title}
 Genre: ${novel.genre}
+Sub-Genres: ${novel.subGenres?.join(', ') || 'N/A'}
+Mood & Tone: ${novel.tone?.join(', ') || 'N/A'}
+Dynamics & Kinks: ${novel.kinks?.join(', ') || 'N/A'}
+Content Tags: ${novel.contentTags?.join(', ') || 'N/A'}
 Context: ${novel.premise}
 ${novel.isR18 ? "R18 Protocol: Explicit themes allowed." : "Standard Protocol."}
 JSON Output: { "premise": "blurb text", "outline": ["Chapter 1: ..."] }`;
@@ -77,9 +106,18 @@ JSON Output: { "premise": "blurb text", "outline": ["Chapter 1: ..."] }`;
 
   async generateDraftChapter(index: number, novel: any, directive: string, memory: any) {
     const ai = this.getClient();
-    const chars = novel.characters.map((c: any) => `- ${c.name}: ${c.description}`).join("\n");
+    const chars = novel.characters.map((c: any) => `- ${c.name}: ${c.description}. Personality: ${c.personality?.join(', ')}. Dialogue Style: ${c.dialogueStyles?.join(', ')}`).join("\n");
     const storyMemory = memory ? `Continuity Points (Previous Events): ${JSON.stringify(memory)}` : "";
     
+    let r18Directive = "";
+    if (novel.isR18) {
+      r18Directive = `
+        R18 SENSORY PROTOCOL: 
+        For intimate scenes, use visceral language. 
+        Incorporate sound effects in italics: *plop*, *slrk*, *mmph*, *wet pop*, *kiss*, *lick*, *pant*, *gasp*.
+      `;
+    }
+
     const prompt = `Write Chapter ${index + 1}: ${novel.outline[index]} for "${novel.title}".
 Characters:
 ${chars}
@@ -87,7 +125,8 @@ ${storyMemory}
 Style: ${novel.novelStyle}
 Genre: ${novel.genre}
 Directive: ${directive}
-Draft professional novel prose. Return ONLY the chapter text.`;
+${r18Directive}
+Return ONLY the prose text. No chat, no intro.`;
 
     const response = await ai.models.generateContent({ 
       model: 'gemini-3-pro-preview', 
@@ -98,6 +137,7 @@ Draft professional novel prose. Return ONLY the chapter text.`;
   }
 
   async generateStoryMemory(text: string) {
+    if (!text?.trim()) return { events: [], character_updates: [], tone_summary: "" };
     const ai = this.getClient();
     const prompt = `Analyze this chapter text and extract key continuity points.
 JSON Output: { "events": [], "character_updates": [], "tone_summary": "" } 
@@ -153,50 +193,61 @@ class GroqAdapter implements AIProvider {
 
   private async callGroq(prompt: string, jsonMode: boolean = false) {
     const client = this.getClient();
-    const chatCompletion = await client.chat.completions.create({
-      messages: [{ role: "user", content: prompt }],
-      model: "llama-3.3-70b-versatile",
-      response_format: jsonMode ? { type: "json_object" } : undefined,
-    });
-    return chatCompletion.choices[0].message.content || "";
+    try {
+      const chatCompletion = await client.chat.completions.create({
+        messages: [
+          { 
+            role: "system", 
+            content: `You are a Master Story Architect. ${jsonMode ? "CRITICAL: You MUST respond ONLY with a valid JSON object. Do not include any other text, greetings, or explanations. Use the word 'json' in your output." : "Respond with clean, immersive novel prose. Do not include introductory text."}` 
+          },
+          { role: "user", content: prompt }
+        ],
+        model: "llama-3.3-70b-versatile",
+        response_format: jsonMode ? { type: "json_object" } : undefined,
+        temperature: 0.7,
+      });
+      return chatCompletion.choices[0].message.content || "";
+    } catch (e: any) {
+      if (e.message?.includes("invalid_api_key") || e.status === 401) throw new Error("INVALID_GROQ_KEY");
+      throw e;
+    }
   }
 
   async generateOutline(novel: any) {
-    const prompt = `Act as a Master Story Architect. Generate a professional blurb and a 12-20 chapter outline.
-Title: ${novel.title}
+    const prompt = `Generate a professional blurb and a 12-20 chapter outline for "${novel.title}".
 Genre: ${novel.genre}
-Context: ${novel.premise}
-Return a JSON object: { "premise": "text", "outline": ["Chapter 1...", "Chapter 2..."] }`;
+Premise: ${novel.premise}
+Mood: ${novel.tone?.join(', ')}
+Return exactly this JSON structure: { "premise": "blurb text", "outline": ["Chapter 1: ...", "Chapter 2: ..."] }`;
     const res = await this.callGroq(prompt, true);
-    return JSON.parse(res);
+    return JSON.parse(cleanJson(res));
   }
 
   async generateDraftChapter(index: number, novel: any, directive: string, memory: any) {
-    const chars = novel.characters.map((c: any) => `- ${c.name}: ${c.description}`).join("\n");
-    const storyMemory = memory ? `Continuity Points: ${JSON.stringify(memory)}` : "";
-    const prompt = `Write Chapter ${index + 1}: ${novel.outline[index]} for "${novel.title}".
-Characters:
+    const chars = novel.characters.map((c: any) => `- ${c.name}: ${c.description}. Personality: ${c.personality?.join(', ')}`).join("\n");
+    const storyMemory = memory ? `Previous Events for Continuity: ${JSON.stringify(memory)}` : "";
+    const chapterTitle = novel.outline[index] || "Untitled Chapter";
+
+    const prompt = `Write Chapter ${index + 1}: ${chapterTitle} for the novel "${novel.title}".
+Characters Involved:
 ${chars}
 ${storyMemory}
-Style: ${novel.novelStyle}
-Genre: ${novel.genre}
 Directive: ${directive}
-Return ONLY the chapter prose.`;
+Return ONLY the chapter prose. No preamble.`;
     return await this.callGroq(prompt);
   }
 
   async generateStoryMemory(text: string) {
-    const prompt = `Analyze this chapter text and extract key continuity points.
-Return a JSON object: { "events": [], "character_updates": [], "tone_summary": "" } 
+    if (!text?.trim()) return { events: [], character_updates: [], tone_summary: "" };
+    const prompt = `Analyze this chapter text for plot continuity.
+Return JSON: { "events": ["event 1"], "character_updates": ["update 1"], "tone_summary": "summary" } 
 TEXT: ${text}`;
     const res = await this.callGroq(prompt, true);
-    return JSON.parse(res);
+    return JSON.parse(cleanJson(res));
   }
 
   async consultArchitect(message: string, context: string) {
-    const prompt = `Expert Novel Architect consultation (No Live Search).
-Story Context: ${context}. 
-User Question: ${message}`;
+    const prompt = `Context: ${context}. Question: ${message}`;
     const text = await this.callGroq(prompt);
     return { text, links: [] };
   }
@@ -235,7 +286,7 @@ export const generateCharacterPortrait = async (char: any, novel: any) => {
   const ai = new GoogleGenAI({ apiKey: key });
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
-    contents: { parts: [{ text: `High-quality character portrait of ${char.name}, ${char.description}, style: ${novel.genre} cinematic concept art.` }] },
+    contents: { parts: [{ text: `High-quality cinematic character portrait: ${char.name}, ${char.description}, style: ${novel.genre}.` }] },
     config: { imageConfig: { aspectRatio: "1:1" } }
   });
   const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);

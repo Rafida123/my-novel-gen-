@@ -7,6 +7,10 @@ export interface Character {
   personality: string[];
   expressions: string[];
   kinks: string[];
+  hairColor: string;
+  eyeColor: string;
+  bodyType: string;
+  distinguishingFeatures: string;
   imageUrl?: string;
 }
 
@@ -24,6 +28,9 @@ export interface Novel {
   isR18: boolean;
   premise: string;
   tone: string[];
+  subGenres: string[];
+  kinks: string[];
+  contentTags: string[];
   tags: string[];
   novelStyle: string;
   ebookStyle: string;
@@ -35,7 +42,6 @@ export interface Novel {
   storyboard?: StoryboardItem[];
 }
 
-// Added 'storyboard' to the AppStep union type to fix the type mismatch in App.tsx line 231
 export type AppStep = 'ideate' | 'style' | 'write' | 'archive' | 'storyboard';
 
 export interface ChatMessage {

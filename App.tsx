@@ -2,12 +2,42 @@ import React, { useState, useEffect } from 'react';
 import { 
   BookOpen, Sparkles, Wand2, Loader2, Library, Save, Users, Palette, 
   Flame, Cpu, ExternalLink, X, UserPlus, User as UserIcon, 
-  Send, Wind, Trash2, PlusCircle, Search, Zap, ImageIcon, Key, AlertTriangle, Settings
+  Send, Wind, Trash2, PlusCircle, Search, Zap, ImageIcon, Key, AlertTriangle, Settings, Check, Fingerprint, Tags, Heart, ShieldAlert, MessageSquare, ChevronDown, ChevronUp
 } from 'lucide-react';
 
 import { Novel, AppStep } from './types.ts';
 import * as ai from './services/aiService.ts';
 import * as db from './services/dbService.ts';
+
+const PERSONALITY_TRAITS = [
+  'Stoic', 'Neurotic', 'Caring', 'Aggressive', 'Playful', 'Calculating', 
+  'Innocent', 'Cynical', 'Melancholic', 'Optimistic', 'Rebellious', 'Disciplined'
+];
+
+const DIALOGUE_STYLES = [
+  'Sarcastic & Blunt', 'Formal & Poetic', 'Soft-Spoken & Shy', 'Arrogant & Commanding', 
+  'Uses Heavy Slang', 'Playful & Teasing', 'Stoic & Minimalist', 'Warm & Nurturing', 
+  'Rough & Dirty', 'Quietly Intense'
+];
+
+const SUB_GENRES = [
+  'Straight Romance', 'Yaoi (B×B)', 'Lesbian (G×G)', 'BDSM / Kink', 
+  'Dark Romance', 'Fantasy Romance', 'Sci-Fi Romance', 'Reverse Harem', 'Omegaverse'
+];
+
+const MOOD_TONES = [
+  'Flirty', 'Seductive', 'Obsessive', 'Forbidden', 'Slow Burn', 'Enemies to Lovers', 
+  'Sweet', 'Angst', 'Gritty', 'Dark', 'Cozy', 'Steamy', 'Smut', 'Vanilla', 
+  'Hardcore', 'Sensual', 'Erotic', 'Dirty Flirty', 'Melancholic', 'Whimsical', 
+  'High-Stakes', 'Tense', 'Poetic'
+];
+
+const CONTENT_TAGS = [
+  'Oral Sex', 'Cunnilingus', 'Fellatio', 'Anal Play', 'BDSM', 'Bondage', 
+  'Rape/Non-con', 'Dub-con', 'Exhibitionism', 'Voyeurism', 'Domination', 
+  'Submission', 'Aftercare', 'First Time', 'Secret Relationship', 
+  'Power Dynamics', 'Age Gap', 'Size Difference', 'Body Worship'
+];
 
 const App: React.FC = () => {
   const [step, setStep] = useState<AppStep>('archive');
@@ -21,36 +51,21 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [hasSelectedKey, setHasSelectedKey] = useState(true);
   const [aiProvider, setAiProvider] = useState<ai.AIProviderType>(ai.getProviderType());
-
-  // Check if provider has a valid key
-  const isProviderReady = () => {
-    const key = ai.getApiKeyForProvider(aiProvider);
-    return key && key.length > 10;
-  };
-
+  const [expandedCharacters, setExpandedCharacters] = useState<Set<number>>(new Set());
   const [providerReady, setProviderReady] = useState(true);
 
-  const [novel, setNovel] = useState<any>({
-    id: crypto.randomUUID(),
-    title: 'New Story',
-    lastModified: Date.now(),
-    genre: 'Fantasy Romance',
-    isR18: false,
-    premise: '',
-    tone: [],
-    tags: [],
-    novelStyle: 'Third Person Limited',
-    characters: [{ name: 'Protagonist', role: 'Major', description: '' }],
-    generatedPremise: '',
-    outline: [],
-    chapters: {},
-    storyboard: []
-  });
+  // Check if current provider has a usable key
+  const checkProviderReadiness = () => {
+    const key = ai.getApiKeyForProvider(aiProvider);
+    const isReady = !!(key && key.trim().length > 10);
+    setProviderReady(isReady);
+    return isReady;
+  };
 
   useEffect(() => { 
     loadNovels();
     checkKeySelection();
-    setProviderReady(isProviderReady());
+    checkProviderReadiness();
   }, [aiProvider]);
 
   const loadNovels = async () => {
@@ -86,7 +101,6 @@ const App: React.FC = () => {
     if (window.aistudio && typeof window.aistudio.openSelectKey === 'function') {
       // @ts-ignore
       await window.aistudio.openSelectKey();
-      // Assume success after modal open to avoid race condition
       setHasSelectedKey(true);
       setProviderReady(true);
       setError(null);
@@ -113,13 +127,13 @@ const App: React.FC = () => {
     try {
       await task();
     } catch (e: any) {
-      console.error(e);
+      console.error("AI Execution Error:", e);
       const errMsg = e.message || String(e);
-      if (errMsg.includes("MISSING") || errMsg.includes("401") || errMsg.includes("invalid_api_key") || errMsg.includes("Unauthorized")) {
-        setError(`${aiProvider.toUpperCase()} credentials required. Tap 'Setup Key' in the header.`);
+      if (errMsg.includes("MISSING") || errMsg.includes("401") || errMsg.includes("INVALID_GROQ_KEY") || errMsg.includes("Unauthorized")) {
+        setError(`${aiProvider.toUpperCase()} setup required. Check the top header.`);
         setProviderReady(false);
       } else {
-        setError(errMsg);
+        setError(`Architect failure: ${errMsg}`);
       }
     } finally {
       setLoading(false);
@@ -127,15 +141,38 @@ const App: React.FC = () => {
   };
 
   const handleGenerateOutline = () => wrapAiCall(async () => {
+    if (!novel.premise.trim()) throw new Error("Please enter a premise in the Lab first.");
     const res = await ai.generateOutline(novel);
     await save({ ...novel, generatedPremise: res.premise, outline: res.outline });
+    setActiveChapter(0);
   }, "Architecting Full Structure...");
 
-  const handleDraft = (idx: number) => wrapAiCall(async () => {
-    const memory = idx > 0 ? await ai.generateStoryMemory(novel.chapters[idx-1] || "") : null;
-    const draft = await ai.generateDraftChapter(idx, novel, "", memory);
-    await save({ ...novel, chapters: { ...novel.chapters, [idx]: draft } });
-  }, "Drafting Cinematic Scene...");
+  const handleDraft = (idx: number) => {
+    // Click behavior for non-ready states
+    if (!providerReady) {
+      handleOpenKeySelection();
+      return;
+    }
+
+    if (!novel.outline || novel.outline.length === 0) {
+      setStep('ideate');
+      setError("Please generate a story outline in Ideation before drafting.");
+      return;
+    }
+
+    wrapAiCall(async () => {
+      let memory = null;
+      if (idx > 0 && novel.chapters[idx - 1]) {
+        try {
+          memory = await ai.generateStoryMemory(novel.chapters[idx - 1]);
+        } catch (e) {
+          console.warn("Continuity check skipped due to processing error", e);
+        }
+      }
+      const draft = await ai.generateDraftChapter(idx, novel, "", memory);
+      await save({ ...novel, chapters: { ...novel.chapters, [idx]: draft } });
+    }, "Drafting Cinematic Scene...");
+  };
 
   const handlePortrait = (idx: number) => wrapAiCall(async () => {
     const url = await ai.generateCharacterPortrait(novel.characters[idx], novel);
@@ -147,7 +184,7 @@ const App: React.FC = () => {
   }, "Visualizing Character...");
 
   const handleMoodboard = () => wrapAiCall(async () => {
-    const p = `Cinematic environment art: ${novel.outline[activeChapter] || novel.title}. Style: ${novel.genre}. Atmosphere: 4k, digital painting, atmospheric lighting.`;
+    const p = `Cinematic environment art: ${novel.outline[activeChapter] || novel.title}. Style: ${novel.genre}. Atmosphere: 4k.`;
     const url = await ai.generateVisual(p);
     if (url) {
       await save({ ...novel, storyboard: [{ id: crypto.randomUUID(), url, prompt: p }, ...(novel.storyboard || [])] });
@@ -161,13 +198,66 @@ const App: React.FC = () => {
     setChatHistory(prev => [...prev, { role: 'user', text: msg }]);
     try {
       const res = await ai.consultArchitect(msg, novel.generatedPremise || novel.premise);
-      setChatHistory(prev => [...prev, { role: 'ai', text: res.text, links: res.links }]);
+      setChatHistory(prev => [...prev, { role: 'ai', text: res.text }]);
     } catch (e: any) { 
       setChatHistory(prev => [...prev, { role: 'ai', text: `Consultation error: ${e.message}` }]);
     }
   };
 
-  const showSetupButton = !providerReady || (aiProvider === 'gemini' && !hasSelectedKey);
+  const toggleIdeationTag = (field: string, tag: string) => {
+    const current = (novel as any)[field] || [];
+    const updated = current.includes(tag) 
+      ? current.filter((t: string) => t !== tag) 
+      : [...current, tag];
+    setNovel({ ...novel, [field]: updated });
+  };
+
+  const toggleExpand = (idx: number) => {
+    const next = new Set(expandedCharacters);
+    if (next.has(idx)) next.delete(idx);
+    else next.add(idx);
+    setExpandedCharacters(next);
+  };
+
+  const updateCharacterField = (idx: number, field: string, value: any) => {
+    const nc = [...novel.characters];
+    nc[idx] = { ...nc[idx], [field]: value };
+    setNovel({ ...novel, characters: nc });
+  };
+
+  const createDefaultCharacter = () => ({
+    name: 'New Character',
+    role: 'Major',
+    description: '',
+    personality: [],
+    dialogueStyles: [],
+    hairColor: '',
+    eyeColor: '',
+    bodyType: '',
+    distinguishingFeatures: ''
+  });
+
+  const [novel, setNovel] = useState<any>({
+    id: crypto.randomUUID(),
+    title: 'New Story',
+    lastModified: Date.now(),
+    genre: 'Fantasy Romance',
+    isR18: false,
+    premise: '',
+    tone: [],
+    subGenres: [],
+    kinks: [],
+    contentTags: [],
+    tags: [],
+    novelStyle: 'Third Person Limited',
+    characters: [createDefaultCharacter()],
+    generatedPremise: '',
+    outline: [],
+    chapters: {},
+    storyboard: []
+  });
+
+  const showHeaderSetupButton = !providerReady || (aiProvider === 'gemini' && !hasSelectedKey);
 
   return (
     <div className="min-h-screen bg-[#fafafa] flex flex-col font-sans text-slate-900 overflow-hidden">
@@ -191,7 +281,7 @@ const App: React.FC = () => {
             </select>
           </div>
 
-          {showSetupButton && (
+          {showHeaderSetupButton && (
             <button onClick={handleOpenKeySelection} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 text-amber-600 border border-amber-100 text-[10px] font-black uppercase tracking-widest hover:bg-amber-100 transition-all shadow-sm">
               <Key size={14}/> Setup {aiProvider.toUpperCase()} Key
             </button>
@@ -208,12 +298,12 @@ const App: React.FC = () => {
       </header>
 
       {error && (
-        <div className="bg-red-500 text-white px-6 py-2 flex justify-between items-center text-[10px] font-black uppercase tracking-widest z-[60]">
+        <div className="bg-red-500 text-white px-6 py-2 flex justify-between items-center text-[10px] font-black uppercase tracking-widest z-[60] shadow-xl animate-in slide-in-from-top duration-300">
           <div className="flex items-center gap-2">
             <AlertTriangle size={14}/>
             <span>{error}</span>
           </div>
-          <button onClick={() => setError(null)}><X size={14}/></button>
+          <button onClick={() => setError(null)} className="p-1 hover:bg-red-600 rounded transition-colors"><X size={14}/></button>
         </div>
       )}
 
@@ -226,7 +316,11 @@ const App: React.FC = () => {
             { id: 'write', icon: Wand2, label: 'Studio' },
             { id: 'storyboard', icon: ImageIcon, label: 'Moodboard' }
           ].map(s => (
-            <button key={s.id} onClick={() => setStep(s.id as AppStep)} className={`flex items-center gap-3 p-4 rounded-2xl transition-all ${step === s.id ? 'bg-indigo-600 text-white shadow-xl' : 'text-slate-400 hover:bg-slate-50'}`}>
+            <button 
+              key={s.id} 
+              onClick={() => setStep(s.id as AppStep)} 
+              className={`flex items-center gap-3 p-4 rounded-2xl transition-all relative ${step === s.id ? 'bg-indigo-600 text-white shadow-xl' : 'text-slate-400 hover:bg-slate-50'}`}
+            >
               <s.icon size={20}/>
               <span className="hidden lg:block text-[10px] font-black uppercase tracking-widest">{s.label}</span>
             </button>
@@ -244,7 +338,7 @@ const App: React.FC = () => {
           <div className="max-w-5xl mx-auto w-full">
             {step === 'archive' && (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in duration-500">
-                <div onClick={() => { setNovel({ id: crypto.randomUUID(), title: 'Untethered Story', characters: [{ name: 'Protagonist', role: 'Major', description: '' }], outline: [], chapters: {}, storyboard: [] }); setStep('ideate'); }} className="h-64 border-2 border-dashed border-slate-200 rounded-[2.5rem] flex flex-col items-center justify-center gap-4 cursor-pointer hover:border-indigo-400 transition-all group">
+                <div onClick={() => { setNovel({ id: crypto.randomUUID(), title: 'Untethered Story', characters: [createDefaultCharacter()], outline: [], chapters: {}, storyboard: [], subGenres: [], tone: [], kinks: [], contentTags: [] }); setStep('ideate'); }} className="h-64 border-2 border-dashed border-slate-200 rounded-[2.5rem] flex flex-col items-center justify-center gap-4 cursor-pointer hover:border-indigo-400 transition-all group">
                   <PlusCircle className="text-slate-200 group-hover:text-indigo-600" size={48}/><span className="text-[10px] font-black uppercase text-slate-300">New Manuscript</span>
                 </div>
                 {archive.map(item => (
@@ -272,15 +366,43 @@ const App: React.FC = () => {
                     </button>
                   </div>
                 </div>
-                <div className="space-y-8">
+                
+                <div className="space-y-10">
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Manuscript Title</label>
                     <input type="text" value={novel.title} onChange={e => setNovel({...novel, title: e.target.value})} className="w-full text-2xl font-black bg-slate-50 p-6 rounded-3xl outline-none focus:ring-2 ring-indigo-100 transition-all" placeholder="The Echoes of Aethelgard..." />
                   </div>
+
+                  <div className="space-y-4">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-2">
+                      <Tags size={14} className="text-indigo-500"/> Sub-Genre Selection
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {SUB_GENRES.map(tag => {
+                        const isSelected = (novel.subGenres || []).includes(tag);
+                        return (
+                          <button 
+                            key={tag} 
+                            onClick={() => toggleIdeationTag('subGenres', tag)}
+                            className={`px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider transition-all border flex items-center gap-1.5 ${
+                              isSelected 
+                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' 
+                                : 'bg-slate-50 text-slate-400 border-slate-100 hover:border-indigo-200 hover:text-indigo-400'
+                            }`}
+                          >
+                            {isSelected && <Check size={10}/>}
+                            {tag}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">The Core Spark (Premise)</label>
                     <textarea value={novel.premise} onChange={e => setNovel({...novel, premise: e.target.value})} className="w-full h-48 bg-slate-50 p-8 rounded-[2.5rem] outline-none text-lg resize-none shadow-inner focus:bg-white transition-all" placeholder="Describe the heart of the story..." />
                   </div>
+
                   <button onClick={handleGenerateOutline} disabled={loading || !providerReady} className="w-full bg-slate-900 text-white py-6 rounded-3xl font-black uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-xl disabled:opacity-50 flex items-center justify-center gap-3">
                     <Cpu size={20}/> {loading ? 'Architecting...' : 'Construct Outline'}
                   </button>
@@ -292,22 +414,90 @@ const App: React.FC = () => {
               <div className="space-y-8 animate-in fade-in">
                 <div className="flex justify-between items-end">
                   <h2 className="text-3xl font-black">Casting Office</h2>
-                  <button onClick={() => setNovel({...novel, characters: [...novel.characters, { name: '', role: 'Major', description: '' }]})} className="bg-indigo-600 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase shadow-lg hover:bg-indigo-700 transition flex items-center gap-2"><UserPlus size={16}/> Add Character</button>
+                  <button onClick={() => {
+                    const newChars = [...novel.characters, createDefaultCharacter()];
+                    setNovel({...novel, characters: newChars});
+                    setExpandedCharacters(new Set(expandedCharacters).add(newChars.length - 1));
+                  }} className="bg-indigo-600 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase shadow-lg hover:bg-indigo-700 transition flex items-center gap-2"><UserPlus size={16}/> Add Talent</button>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {novel.characters.map((c: any, i: number) => (
-                    <div key={i} className="bg-white p-6 rounded-[2.5rem] border flex gap-6 shadow-sm hover:shadow-xl group relative transition-all">
-                      <div className="w-24 h-24 bg-slate-50 rounded-2xl border flex items-center justify-center overflow-hidden relative group/portrait">
-                        {c.imageUrl ? <img src={c.imageUrl} className="w-full h-full object-cover"/> : <UserIcon size={32} className="text-slate-200"/>}
-                        <button onClick={() => handlePortrait(i)} className="absolute inset-0 bg-indigo-600/60 opacity-0 group-hover/portrait:opacity-100 flex items-center justify-center text-white transition-all"><Palette size={20}/></button>
+                <div className="grid grid-cols-1 gap-4">
+                  {novel.characters.map((c: any, i: number) => {
+                    const isExpanded = expandedCharacters.has(i);
+                    return (
+                      <div key={i} className={`bg-white rounded-[2rem] border transition-all duration-300 overflow-hidden shadow-sm hover:shadow-md ${isExpanded ? 'ring-2 ring-indigo-50 shadow-xl' : ''}`}>
+                        <div onClick={() => toggleExpand(i)} className="p-6 flex items-center gap-4 cursor-pointer hover:bg-slate-50 transition-colors group">
+                          <div className="w-12 h-12 bg-slate-100 rounded-xl border flex items-center justify-center overflow-hidden shrink-0">
+                            {c.imageUrl ? <img src={c.imageUrl} className="w-full h-full object-cover"/> : <UserIcon size={20} className="text-slate-300"/>}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <h4 className={`font-black text-sm uppercase tracking-wider truncate ${isExpanded ? 'text-indigo-600' : 'text-slate-700'}`}>
+                              {c.name || "Untitled Character"}
+                            </h4>
+                            <div className="flex gap-4 mt-1">
+                              <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-1"><Wind size={10}/> {c.personality?.length || 0} Traits</span>
+                              <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-1"><MessageSquare size={10}/> {c.dialogueStyles?.length || 0} Styles</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <button onClick={(e) => { e.stopPropagation(); const nc = [...novel.characters]; nc.splice(i, 1); setNovel({...novel, characters: nc}); }} className="text-slate-200 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={16}/></button>
+                            {isExpanded ? <ChevronUp className="text-slate-300" size={20}/> : <ChevronDown className="text-slate-300" size={20}/>}
+                          </div>
+                        </div>
+
+                        {isExpanded && (
+                          <div className="p-8 border-t border-slate-50 space-y-8 animate-in slide-in-from-top-2 duration-300">
+                            <div className="flex flex-col md:flex-row gap-8">
+                              <div className="flex gap-6 items-start">
+                                <div className="w-32 h-32 bg-slate-50 rounded-[2rem] border flex items-center justify-center overflow-hidden relative group/portrait shadow-inner shrink-0">
+                                  {c.imageUrl ? <img src={c.imageUrl} className="w-full h-full object-cover"/> : <UserIcon size={40} className="text-slate-200"/>}
+                                  <button onClick={() => handlePortrait(i)} className="absolute inset-0 bg-indigo-600/60 opacity-0 group-hover/portrait:opacity-100 flex items-center justify-center text-white transition-all"><Palette size={24}/></button>
+                                </div>
+                                <div className="flex-1 space-y-3">
+                                  <input value={c.name} onChange={e => updateCharacterField(i, 'name', e.target.value)} className="font-black text-2xl w-full bg-transparent outline-none focus:text-indigo-600 transition-colors" placeholder="Character Name"/>
+                                  <textarea value={c.description} onChange={e => updateCharacterField(i, 'description', e.target.value)} className="text-sm text-slate-500 w-full h-20 bg-transparent outline-none resize-none custom-scrollbar font-medium" placeholder="Role, drive, and essence..."/>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                              <div className="space-y-3">
+                                <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-2"><Wind size={12}/> Personality</label>
+                                <div className="flex flex-wrap gap-2">
+                                  {PERSONALITY_TRAITS.map(trait => {
+                                    const isSelected = (c.personality || []).includes(trait);
+                                    return (
+                                      <button key={trait} onClick={() => {
+                                        const nc = [...novel.characters];
+                                        const cur = nc[i].personality || [];
+                                        nc[i].personality = cur.includes(trait) ? cur.filter((t: any) => t !== trait) : [...cur, trait];
+                                        setNovel({...novel, characters: nc});
+                                      }} className={`px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider transition-all border flex items-center gap-1.5 ${isSelected ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-400 border-slate-100 hover:border-indigo-200'}`}>{isSelected && <Check size={10}/>}{trait}</button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                              <div className="space-y-3">
+                                <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-2"><MessageSquare size={12}/> Dialogue Style</label>
+                                <div className="flex flex-wrap gap-2">
+                                  {DIALOGUE_STYLES.map(style => {
+                                    const isSelected = (c.dialogueStyles || []).includes(style);
+                                    return (
+                                      <button key={style} onClick={() => {
+                                        const nc = [...novel.characters];
+                                        const cur = nc[i].dialogueStyles || [];
+                                        nc[i].dialogueStyles = cur.includes(style) ? cur.filter((s: any) => s !== style) : [...cur, style];
+                                        setNovel({...novel, characters: nc});
+                                      }} className={`px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider transition-all border flex items-center gap-1.5 ${isSelected ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-400 border-slate-100 hover:border-indigo-200'}`}>{isSelected && <Check size={10}/>}{style}</button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      <div className="flex-1 space-y-1">
-                        <input value={c.name} onChange={e => { const nc = [...novel.characters]; nc[i].name = e.target.value; setNovel({...novel, characters: nc}); }} className="font-black text-lg w-full bg-transparent outline-none focus:text-indigo-600 transition-colors" placeholder="Character Name"/>
-                        <textarea value={c.description} onChange={e => { const nc = [...novel.characters]; nc[i].description = e.target.value; setNovel({...novel, characters: nc}); }} className="text-xs text-slate-400 w-full h-16 bg-transparent outline-none resize-none mt-2 custom-scrollbar" placeholder="Drive, motivation, aesthetic..."/>
-                      </div>
-                      <button onClick={() => { const nc = [...novel.characters]; nc.splice(i, 1); setNovel({...novel, characters: nc}); }} className="absolute top-4 right-4 text-slate-200 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={16}/></button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -320,12 +510,23 @@ const App: React.FC = () => {
                       <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center font-black text-xs shadow-md">{activeChapter + 1}</div>
                       <h3 className="font-black text-lg truncate max-w-xs">{novel.outline[activeChapter] || "Prologue"}</h3>
                     </div>
-                    <button onClick={() => handleDraft(activeChapter)} disabled={!providerReady} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl text-[10px] font-black uppercase hover:bg-indigo-700 shadow-lg flex items-center gap-2 transition-all disabled:opacity-50"><Zap size={14}/> AI Draft</button>
+                    <button 
+                      onClick={() => handleDraft(activeChapter)} 
+                      disabled={loading} 
+                      className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 transition-all shadow-lg active:scale-95 ${
+                        (!providerReady || novel.outline.length === 0) 
+                          ? 'bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100' 
+                          : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                      }`}
+                    >
+                      <Zap size={14} className={!providerReady ? 'text-amber-400' : ''}/> 
+                      {novel.outline.length === 0 ? 'Needs Outline' : (providerReady ? 'AI Draft' : 'Setup Required')}
+                    </button>
                   </div>
                   <textarea value={novel.chapters[activeChapter] || ""} onChange={e => setNovel({...novel, chapters: {...novel.chapters, [activeChapter]: e.target.value}})} className="flex-1 p-12 text-xl leading-relaxed outline-none font-serif font-medium resize-none selection:bg-indigo-100 custom-scrollbar" placeholder="The prose begins here..." />
                   <div className="p-8 border-t bg-slate-50/50 flex justify-between gap-4">
                     <button onClick={() => setActiveChapter(Math.max(0, activeChapter - 1))} disabled={activeChapter === 0} className="px-6 py-3 bg-white border rounded-xl text-[10px] font-black uppercase disabled:opacity-30">Prev Beat</button>
-                    <button onClick={() => setActiveChapter(Math.min(novel.outline.length-1, activeChapter + 1))} disabled={activeChapter >= novel.outline.length - 1} className="px-6 py-3 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase disabled:opacity-30">Next Beat</button>
+                    <button onClick={() => setActiveChapter(Math.min(novel.outline.length-1, activeChapter + 1))} disabled={activeChapter >= novel.outline.length - 1 || novel.outline.length === 0} className="px-6 py-3 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase disabled:opacity-30">Next Beat</button>
                   </div>
                 </div>
               </div>
@@ -361,26 +562,10 @@ const App: React.FC = () => {
               <button onClick={() => setShowConsultant(false)} className="hover:text-indigo-400 transition-colors"><X size={20}/></button>
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50 custom-scrollbar">
-              {chatHistory.length === 0 && (
-                <div className="py-10 text-center space-y-4 px-6">
-                   <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center mx-auto shadow-sm text-indigo-600"><Wind size={24}/></div>
-                   <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Ask for plot advice or research. Powered by Google Search (on Gemini).</p>
-                </div>
-              )}
               {chatHistory.map((m, i) => (
                 <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                   <div className={`max-w-[85%] p-4 rounded-3xl text-xs leading-relaxed shadow-sm ${m.role === 'user' ? 'bg-indigo-600 text-white ml-4' : 'bg-white border text-slate-700 mr-4'}`}>
                     {m.text}
-                    {m.links && m.links.length > 0 && (
-                      <div className="mt-3 pt-3 border-t border-slate-100 space-y-1">
-                        <p className="text-[8px] font-black uppercase text-indigo-500">Sources:</p>
-                        {m.links.map((l:any, idx:number) => (
-                          <a key={idx} href={l.uri} target="_blank" className="flex items-center gap-1 text-[9px] font-bold text-indigo-600 hover:underline truncate">
-                            <ExternalLink size={8}/> {l.title}
-                          </a>
-                        ))}
-                      </div>
-                    )}
                   </div>
                 </div>
               ))}
@@ -397,7 +582,7 @@ const App: React.FC = () => {
         <div className="fixed inset-0 z-[1000] bg-white/80 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in">
           <div className="bg-white p-12 rounded-[3.5rem] shadow-2xl border border-slate-100 flex flex-col items-center gap-6">
             <Loader2 className="animate-spin text-indigo-600" size={48}/>
-            <p className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 animate-pulse">{loadingMessage}</p>
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 animate-pulse">{loadingMessage}</p>
           </div>
         </div>
       )}
