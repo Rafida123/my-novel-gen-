@@ -1,24 +1,25 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   BookOpen, Sparkles, Wand2, Loader2, MessageSquarePlus, Send, 
-  PenTool, Users, Settings2, UserPlus, X, Palette, Flame, 
-  ChevronRight, ChevronLeft, HeartPulse, Menu, RotateCcw, 
-  Lightbulb, CheckCircle2, History, Zap, Download, BookMarked,
-  Trash2, Mic2, MessageSquareQuote, Tag as TagIcon, Wind, Library,
-  Save, PlusCircle, Calendar, Clock, BrainCircuit, Heart, Ghost,
-  HandMetal, Check, Search, ArrowUpDown, Filter, Activity, Layers,
-  Scissors, ZapOff, Timer, Cpu, MessageSquare, Brain
+  Library, Save, PlusCircle, RotateCcw, ChevronLeft, ChevronRight,
+  History, Settings2, Trash2, Mic2, Lightbulb, CheckCircle2, X, Plus, 
+  UserPlus, Users, Palette, Tag as TagIcon, Flame, Calendar, Cpu, 
+  AlertTriangle, Key, ExternalLink, Menu, Eye, Volume2, Wind, Fingerprint, Coffee, Copy, Maximize2, Minimize2, Highlighter, ShieldAlert
 } from 'lucide-react';
+
+// Core State & Types
 import { Novel, AppStep, ChatMessage, Character } from './types.ts';
 import { 
-  generateOutline, 
-  generateChapterContent, 
-  getAiSuggestions, 
-  chatWithConsultant,
-  AIProvider
+  generateOutline, generateChapterContent, getAiSuggestions, 
+  chatWithConsultant, AIProvider, infuseSensoryDetail, polishProse
 } from './services/geminiService.ts';
 import * as db from './services/dbService.ts';
+
+const personaArchetypes = ['Stoic', 'Neurotic', 'Caring', 'Aggressive', 'Playful', 'Calculating', 'Innocent', 'Cynical', 'Melancholic', 'Optimistic', 'Rebellious', 'Disciplined'];
+const dialogueTones = ['Sarcastic & Blunt', 'Formal & Poetic', 'Soft-Spoken & Shy', 'Arrogant & Commanding', 'Uses Heavy Slang', 'Playful & Teasing', 'Stoic & Minimalist', 'Warm & Nurturing', 'Rough & Dirty', 'Quietly Intense'];
+const sensoryExpressions = ['Vocal & Needy', 'Breathless Whispers', 'Deep Groans', 'Silent & Intense', 'Pleading', 'Commanding', 'Animalistic', 'Soft Whispers', 'Frequent Dirty Talk', 'Crying with Pleasure', 'Rolling Eyes (Intense)', 'Deeply Moany', 'Highly Expressive'];
+const kinkDynamics = ['Oral Sex', 'Cunnilingus', 'BDSM', 'Impact Play', 'Exhibitionism', 'Praise/Degradation', 'Overstimulation', 'Mirror Play', 'Wax Play', 'Edge Play', 'Breath Play', 'Roleplay', 'Consensual Non-Consent'];
 
 const genreOptions = ['Straight Romance', 'Yaoi (B×B)', 'Lesbian (G×G)', 'BDSM / Kink', 'Dark Romance', 'Fantasy Romance', 'Sci-Fi Romance', 'Reverse Harem', 'Omegaverse'];
 const atmosphereOptions = {
@@ -26,48 +27,25 @@ const atmosphereOptions = {
   "Intensity": ['Steamy', 'Smut', 'Vanilla', 'Hardcore', 'Sensual'],
   "Mood": ['Erotic', 'Dirty Flirty', 'Melancholic', 'Whimsical', 'High-Stakes', 'Tense', 'Poetic']
 };
-const tagOptions = [
-  'Oral Sex', 'Cunnilingus', 'Fellatio', 'Anal Play', 'BDSM', 'Bondage', 'Domination', 'Submission', 'Aftercare', 'First Time', 'Secret Relationship', 'Power Dynamics', 'Age Gap', 'Size Difference', 'Body Worship'
-];
-const dialoguePresets = [
-  'Sarcastic & Blunt', 'Formal & Poetic', 'Soft-Spoken & Shy', 'Arrogant & Commanding', 'Uses Heavy Slang', 'Playful & Teasing', 'Stoic & Minimalist', 'Warm & Nurturing', 'Rough & Dirty', 'Quietly Intense'
-];
-const personalityPresets = [
-  'Stoic', 'Neurotic', 'Caring', 'Aggressive', 'Playful', 'Calculating', 'Innocent', 'Cynical', 'Melancholic', 'Optimistic', 'Rebellious', 'Disciplined'
-];
-const expressionPresets = [
-  'Vocal & Needy', 'Breathless Whispers', 'Deep Groans', 'Silent & Intense', 'Pleading', 'Commanding', 'Animalistic', 'Soft Whimpers', 'Frequent Dirty Talk', 'Crying with Pleasure', 'Rolling Eyes (Intense)', 'Deeply Moany', 'Highly Expressive'
-];
-const kinkPresets = [
-  'Oral Sex', 'Cunnilingus', 'BDSM', 'Impact Play', 'Exhibitionism', 'Praise/Degradation', 'Overstimulation', 'Mirror Play', 'Wax Play', 'Edge Play', 'Breath Play', 'Roleplay', 'Consensual Non-Consent'
-];
-
-const LEGACY_STORAGE_KEY = 'novlgen_architect_archive';
-
-type SortOption = 'newest' | 'oldest' | 'title-az' | 'title-za';
 
 const App: React.FC = () => {
   // --- UI STATE ---
   const [step, setStep] = useState<AppStep>('archive'); 
   const [loading, setLoading] = useState(false);
-  const [provider, setProvider] = useState<AIProvider>('gemini');
+  const [sensoryLoading, setSensoryLoading] = useState(false);
+  const [polishLoading, setPolishLoading] = useState(false);
+  const [provider, setProvider] = useState<AIProvider>('groq'); 
   const [showBrainstorm, setShowBrainstorm] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isFocusMode, setIsFocusMode] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-  const [customDirective, setCustomDirective] = useState("");
   const [activeChapter, setActiveChapter] = useState(0);
   const [archive, setArchive] = useState<Novel[]>([]);
-
-  // --- CHAPTER CHOREOGRAPHY STATE ---
-  const [sceneBlueprint, setSceneBlueprint] = useState("");
-  const [intimacyPace, setIntimacyPace] = useState<'Teasing' | 'Rushed' | 'Slow-Burn' | 'Urgent' | 'None'>('None');
-  const [intimacyDynamic, setIntimacyDynamic] = useState<'Multiple Orgasms' | 'Overstimulation' | 'Sweet/Tender' | 'Primal/Rough' | 'Standard' | 'None'>('None');
-
-  // --- ARCHIVE FILTER/SORT STATE ---
-  const [searchTerm, setSearchTerm] = useState("");
-  const [filterGenre, setFilterGenre] = useState("All");
-  const [sortBy, setSortBy] = useState<SortOption>('newest');
+  const [error, setError] = useState<string | null>(null);
+  const [hasGeminiApiKey, setHasGeminiApiKey] = useState(true);
+  const [sensorySparks, setSensorySparks] = useState<any>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   // --- STORY STATE ---
   const [novel, setNovel] = useState<Novel>({
@@ -83,13 +61,9 @@ const App: React.FC = () => {
     ebookStyle: 'Modern Serif',
     characters: [
       { 
-        name: 'Elara', 
-        role: 'Protagonist', 
-        description: 'Quiet, observational, smells like lavender and rain.', 
-        dialogueStyles: ['Soft-Spoken & Shy'],
-        personality: ['Caring'],
-        expressions: ['Soft Whimpers'],
-        kinks: ['Praise/Degradation']
+        name: 'Elara', role: 'Protagonist', description: 'Quiet, observational, smells like lavender and rain.', 
+        dialogueStyles: ['Soft-Spoken & Shy'], personality: ['Caring'],
+        expressions: ['Soft Whimpers'], kinks: ['Praise/Degradation']
       }
     ],
     generatedPremise: '',
@@ -98,268 +72,206 @@ const App: React.FC = () => {
     aiSuggestions: {} 
   });
 
-  // --- INITIALIZATION & MIGRATION ---
+  // --- ANALYTICS ---
+  const wordCount = useMemo(() => {
+    const text = novel.chapters[activeChapter] || "";
+    return text.trim().split(/\s+/).filter(Boolean).length;
+  }, [novel.chapters, activeChapter]);
+
+  const readingTime = useMemo(() => Math.ceil(wordCount / 200), [wordCount]);
+
+  // --- INITIALIZATION ---
   useEffect(() => {
-    const initializeStorage = async () => {
-      try {
-        const legacyData = localStorage.getItem(LEGACY_STORAGE_KEY);
-        if (legacyData) {
-          const parsed: Novel[] = JSON.parse(legacyData);
-          for (const n of parsed) {
-            await db.saveNovel(n);
-          }
-          localStorage.removeItem(LEGACY_STORAGE_KEY);
-        }
-        const storedNovels = await db.getAllNovels();
-        setArchive(storedNovels);
-      } catch (e) {
-        console.error("Storage initialization failed", e);
-      }
-    };
-    initializeStorage();
+    db.getAllNovels().then(setArchive).catch(console.error);
+    if ((window as any).aistudio) {
+      (window as any).aistudio.hasSelectedApiKey().then(setHasGeminiApiKey);
+    }
   }, []);
 
-  // --- COMPUTED ARCHIVE ---
-  const filteredAndSortedArchive = useMemo(() => {
-    let result = [...archive];
-    if (searchTerm.trim()) {
-      const lowerSearch = searchTerm.toLowerCase();
-      result = result.filter(n => 
-        n.title.toLowerCase().includes(lowerSearch) || 
-        n.premise.toLowerCase().includes(lowerSearch)
-      );
+  useEffect(() => {
+    if (showBrainstorm) {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-    if (filterGenre !== "All") {
-      result = result.filter(n => n.genre === filterGenre);
+  }, [chatHistory, showBrainstorm]);
+
+  const filteredArchive = useMemo(() => {
+    return archive.sort((a, b) => b.lastModified - a.lastModified);
+  }, [archive]);
+
+  const handleOpenKeySelection = async () => {
+    if ((window as any).aistudio) {
+      await (window as any).aistudio.openSelectKey();
+      setHasGeminiApiKey(true);
+      setError(null);
     }
-    result.sort((a, b) => {
-      switch (sortBy) {
-        case 'newest': return b.lastModified - a.lastModified;
-        case 'oldest': return a.lastModified - b.lastModified;
-        case 'title-az': return a.title.localeCompare(b.title);
-        case 'title-za': return b.title.localeCompare(a.title);
-        default: return 0;
-      }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text).catch(err => {
+      console.error('Failed to copy text: ', err);
     });
-    return result;
-  }, [archive, searchTerm, filterGenre, sortBy]);
-
-  // --- PERSISTENCE HELPERS ---
-  const saveToArchive = async (updatedNovel: Novel) => {
-    try {
-      await db.saveNovel(updatedNovel);
-      setArchive(prev => {
-        const filtered = prev.filter(n => n.id !== updatedNovel.id);
-        return [updatedNovel, ...filtered];
-      });
-    } catch (e) {
-      console.error("Failed to save to database", e);
-    }
   };
 
-  const deleteFromArchive = async (id: string, e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    if (!confirm("Are you sure you want to delete this manuscript?")) return;
-    try {
-      await db.deleteNovel(id);
-      setArchive(prev => prev.filter(n => n.id !== id));
-    } catch (e) {
-      console.error("Failed to delete from database", e);
-    }
-  };
-
-  const startNewProject = () => {
-    const newNovel: Novel = {
-      id: crypto.randomUUID(),
-      title: 'New Manuscript',
-      lastModified: Date.now(),
-      genre: 'Straight Romance',
-      isR18: false,
-      premise: '',
-      tone: [], 
-      tags: [],
-      novelStyle: 'Third Person Limited',
-      ebookStyle: 'Modern Serif',
-      characters: [
-        { name: '', role: 'Protagonist', description: '', dialogueStyles: [], personality: [], expressions: [], kinks: [] }
-      ],
-      generatedPremise: '',
-      outline: [],
-      chapters: {},
-      aiSuggestions: {} 
-    };
-    setNovel(newNovel);
-    setStep('ideate');
-  };
-
-  const loadNovel = (n: Novel) => {
-    setNovel(n);
-    setActiveChapter(0);
-    setStep(n.outline.length > 0 ? 'write' : 'ideate');
-  };
-
-  // --- HANDLERS ---
-  const handleGenerateOutline = async () => {
+  const runAiTask = useCallback(async (task: () => Promise<void>) => {
+    setError(null);
     setLoading(true);
     try {
-      const data = await generateOutline(novel, provider);
-      const updated = { 
-        ...novel, 
-        generatedPremise: data.premise, 
-        outline: data.outline,
-        lastModified: Date.now(),
-        title: data.outline[0] || novel.title
-      };
-      setNovel(updated);
-      await saveToArchive(updated);
-    } catch (err) {
-      console.error(err);
-      alert("AI Generation failed. Check console and API key.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGenerateChapter = async (index: number, isRegen: boolean = false, directive: string = "") => {
-    setLoading(true);
-    let finalDirective = directive;
-    if (sceneBlueprint.trim()) finalDirective += `\nREQUIRED SCENES: ${sceneBlueprint}`;
-    if (intimacyPace !== 'None' || intimacyDynamic !== 'None') {
-      finalDirective += `\nINTIMACY BLUEPRINT: 
-        ${intimacyPace !== 'None' ? `- Pace: ${intimacyPace}` : ''}
-        ${intimacyDynamic !== 'None' ? `- Dynamic: ${intimacyDynamic}` : ''}
-      `;
-    }
-
-    try {
-      const text = await generateChapterContent(index, novel, isRegen, finalDirective, provider);
-      const updatedChapters = { ...novel.chapters, [index]: text || "" };
-      let updatedSuggestions = { ...novel.aiSuggestions };
-      
-      if (index < 11 && text) {
-        const suggs = await getAiSuggestions(text, novel.outline[index + 1], provider);
-        updatedSuggestions[index] = suggs;
+      await task();
+    } catch (e: any) {
+      if (e.message === "ARCHITECT_AUTH_REQUIRED") {
+        setError("Gemini Key required. Click Resolve or switch to Cerebro.");
+        setHasGeminiApiKey(false);
+      } else if (e.message === "ARCHITECT_QUOTA_EXHAUSTED") {
+        setError("AI Quota exhausted (429). Please wait.");
+      } else {
+        setError(e.message || "An unexpected error occurred.");
       }
-
-      const updatedNovel = {
-        ...novel,
-        chapters: updatedChapters,
-        aiSuggestions: updatedSuggestions,
-        lastModified: Date.now()
-      };
-      
-      setNovel(updatedNovel);
-      await saveToArchive(updatedNovel);
-      setActiveChapter(index);
-      setStep('write');
-      setCustomDirective("");
-    } catch (err) {
-      console.error(err);
-      alert("Generation failed.");
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const saveToArchive = async (updatedNovel: Novel) => {
+    await db.saveNovel(updatedNovel);
+    setArchive(prev => [updatedNovel, ...prev.filter(n => n.id !== updatedNovel.id)]);
   };
 
-  const toggleTone = (t: string) => {
-    setNovel(p => ({
-      ...p, 
-      tone: p.tone.includes(t) ? p.tone.filter(x => x !== t) : [...p.tone, t]
-    }));
+  const handleGenerateOutline = () => runAiTask(async () => {
+    const data = await generateOutline(novel, provider);
+    const updated = { ...novel, generatedPremise: data.premise, outline: data.outline, lastModified: Date.now() };
+    setNovel(updated);
+    await saveToArchive(updated);
+  });
+
+  const handleGenerateChapter = (index: number, isRegen: boolean = false, directive: string = "") => runAiTask(async () => {
+    const text = await generateChapterContent(index, novel, isRegen, directive, provider);
+    const updatedChapters = { ...novel.chapters, [index]: text || "" };
+    
+    if (novel.outline[index + 1] && text) {
+      getAiSuggestions(text, novel.outline[index + 1], provider)
+        .then(s => setNovel(p => ({ ...p, aiSuggestions: { ...p.aiSuggestions, [index]: s } })))
+        .catch(() => {});
+    }
+
+    const updatedNovel = { ...novel, chapters: updatedChapters, lastModified: Date.now() };
+    setNovel(updatedNovel);
+    await saveToArchive(updatedNovel);
+    setActiveChapter(index);
+    setStep('write');
+  });
+
+  const handleInfuseSensory = async () => {
+    const content = novel.chapters[activeChapter];
+    if (!content) return;
+    setSensoryLoading(true);
+    try {
+      const sparks = await infuseSensoryDetail(content, novel, provider);
+      setSensorySparks(sparks);
+    } catch (e) {
+      console.error(e);
+      setError("Sensory infusion failed.");
+    } finally {
+      setSensoryLoading(false);
+    }
   };
 
-  const toggleTag = (tag: string) => {
-    setNovel(p => ({
-      ...p,
-      tags: p.tags.includes(tag) ? p.tags.filter(x => x !== tag) : [...p.tags, tag]
-    }));
+  const handlePolishProse = async () => {
+    const content = novel.chapters[activeChapter];
+    if (!content || !confirm("Improve current draft with AI Prose Polisher?")) return;
+    setPolishLoading(true);
+    try {
+      const polished = await polishProse(content, novel, provider);
+      if (polished) {
+        const updatedChapters = { ...novel.chapters, [activeChapter]: polished };
+        const updatedNovel = { ...novel, chapters: updatedChapters, lastModified: Date.now() };
+        setNovel(updatedNovel);
+        await saveToArchive(updatedNovel);
+      }
+    } catch (e) {
+      console.error(e);
+      setError("Prose polish failed.");
+    } finally {
+      setPolishLoading(false);
+    }
   };
 
-  const updateCharacter = (idx: number, field: keyof Character, value: any) => {
+  const deleteFromArchive = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm("Delete this manuscript forever?")) return;
+    await db.deleteNovel(id);
+    setArchive(prev => prev.filter(n => n.id !== id));
+  };
+
+  const toggleList = (idx: number, field: keyof Character, value: string) => {
+    const chars = [...novel.characters];
+    const currentList = (chars[idx][field] as string[]) || [];
+    const updatedList = currentList.includes(value) 
+      ? currentList.filter(v => v !== value) 
+      : [...currentList, value];
+    chars[idx] = { ...chars[idx], [field]: updatedList };
+    setNovel(p => ({ ...p, characters: chars }));
+  };
+
+  const updateCharacterField = (idx: number, field: keyof Character, value: any) => {
     const chars = [...novel.characters];
     chars[idx] = { ...chars[idx], [field]: value };
     setNovel(p => ({ ...p, characters: chars }));
   };
 
-  const toggleCharList = (charIdx: number, field: 'dialogueStyles' | 'personality' | 'expressions' | 'kinks', item: string) => {
-    setNovel(prev => {
-      const newChars = [...prev.characters];
-      const list = newChars[charIdx][field] as string[];
-      const newList = list.includes(item) 
-        ? list.filter(s => s !== item) 
-        : [...list, item];
-      newChars[charIdx] = { ...newChars[charIdx], [field]: newList };
-      return { ...prev, characters: newChars };
-    });
-  };
-
-  const sendChatMessage = async () => {
+  const sendChatMessage = () => runAiTask(async () => {
     if (!chatInput.trim()) return;
-    const msg = chatInput;
-    setChatInput("");
+    const msg = chatInput; setChatInput("");
     setChatHistory(p => [...p, { role: 'user', text: msg }]);
-    setLoading(true);
-    try {
-      const res = await chatWithConsultant(msg, novel.generatedPremise, provider);
-      setChatHistory(p => [...p, { role: 'ai', text: res || "No advice found." }]);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
+    const res = await chatWithConsultant(msg, novel.generatedPremise || novel.premise, provider);
+    setChatHistory(p => [...p, { role: 'ai', text: res || "I'm sorry, I couldn't process that advice." }]);
+  });
 
-  const exportText = (n: Novel = novel) => {
-    const content = Object.values(n.chapters).join('\n\n---\n\n');
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${n.genre.replace(/\s+/g, '_')}_Draft.txt`;
-    a.click();
-  };
-
-  const formatDate = (ts: number) => {
-    return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(ts);
-  };
+  const showKeyError = !!error;
 
   return (
-    <div className="min-h-screen bg-[#fafafa] text-slate-900 font-sans flex flex-col">
-      {/* HEADER */}
-      <header className="bg-white/80 backdrop-blur-md border-b px-4 py-3 md:px-8 flex justify-between items-center sticky top-0 z-50">
-        <div className="flex items-center gap-4">
-          <button onClick={() => setMobileMenuOpen(true)} className="lg:hidden p-2 hover:bg-slate-100 rounded-xl"><Menu size={20} /></button>
-          <div className="flex items-center gap-2">
-            <div className="bg-indigo-600 p-2 rounded-xl text-white shadow-lg shadow-indigo-200"><BookOpen size={20} /></div>
-            <h1 className="text-sm font-[900] uppercase tracking-tighter">Architect <span className="text-indigo-600">Studio</span></h1>
+    <div className={`min-h-screen ${step === 'write' ? 'bg-white' : 'bg-[#fafafa]'} text-slate-900 font-sans flex flex-col transition-all ${isFocusMode ? 'overflow-hidden' : ''}`}>
+      {/* ERROR BAR */}
+      {showKeyError && (
+        <div className="bg-rose-500 text-white px-8 py-3 flex justify-between items-center sticky top-0 z-[100] shadow-xl animate-in slide-in-from-top duration-300">
+          <div className="flex items-center gap-3">
+            <AlertTriangle size={18} />
+            <span className="text-[10px] font-black uppercase tracking-widest">{error}</span>
+          </div>
+          <div className="flex items-center gap-4">
+            {(provider === 'gemini' || error?.includes("Gemini")) && !hasGeminiApiKey && (
+              <button onClick={handleOpenKeySelection} className="flex items-center gap-2 px-4 py-1.5 bg-white text-rose-500 rounded-lg text-[9px] font-black uppercase hover:bg-rose-50 transition-all">
+                <Key size={12}/> Resolve Key
+              </button>
+            )}
+            <button onClick={() => setError(null)} className="opacity-50 hover:opacity-100"><X size={18}/></button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-           {/* PROVIDER TOGGLE */}
-           <div className="hidden md:flex bg-slate-100 p-1 rounded-2xl border border-slate-200 mr-2">
-              <button 
-                onClick={() => setProvider('gemini')} 
-                className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${provider === 'gemini' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
-              >
-                Architect
-              </button>
-              <button 
-                onClick={() => setProvider('groq')} 
-                className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${provider === 'groq' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
-              >
-                Cerebro
-              </button>
-           </div>
-           
-           {step !== 'archive' && (
-             <button onClick={() => { saveToArchive(novel); alert("Manuscript checked into the archive."); }} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-all text-[10px] font-black uppercase tracking-widest border border-indigo-100">
-               <Save size={16} /> Save
-             </button>
-           )}
-           <button onClick={() => exportText()} className="p-2.5 rounded-xl bg-slate-50 text-slate-400 hover:text-indigo-600 border border-slate-100 transition-all"><Download size={18} /></button>
-           <button onClick={() => setShowBrainstorm(!showBrainstorm)} className="p-2.5 rounded-xl bg-slate-900 text-white hover:bg-indigo-600 transition-all shadow-lg shadow-slate-200"><MessageSquarePlus size={18} /></button>
-        </div>
-      </header>
+      )}
+
+      {/* HEADER */}
+      {!isFocusMode && (
+        <header className="bg-white border-b px-4 py-3 md:px-8 flex justify-between items-center sticky top-0 z-50">
+          <div className="flex items-center gap-4">
+            <button onClick={() => setMobileMenuOpen(true)} className="lg:hidden p-2 hover:bg-slate-100 rounded-xl transition-all"><Menu size={20} /></button>
+            <div className="flex items-center gap-2">
+              <div className="bg-indigo-600 p-2 rounded-xl text-white shadow-lg shadow-indigo-200"><BookOpen size={20} /></div>
+              <h1 className="text-sm font-[900] uppercase tracking-tighter">Architect <span className="text-indigo-600">Studio</span></h1>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+             <div className="hidden md:flex bg-slate-100 p-1 rounded-2xl mr-2">
+               <button onClick={() => setProvider('groq')} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase transition-all ${provider === 'groq' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>Cerebro (Llama 3.3)</button>
+               <button onClick={() => setProvider('gemini')} className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase transition-all ${provider === 'gemini' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>Architect (Gemini)</button>
+             </div>
+             {step !== 'archive' && (
+               <button onClick={() => saveToArchive(novel)} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-all text-[10px] font-black uppercase border border-indigo-100">
+                 <Save size={16} /> Save
+               </button>
+             )}
+             <button onClick={() => setShowBrainstorm(!showBrainstorm)} className={`p-2.5 rounded-xl transition-all shadow-lg ${showBrainstorm ? 'bg-indigo-600 text-white' : 'bg-slate-900 text-white hover:bg-indigo-600'}`}><MessageSquarePlus size={18} /></button>
+          </div>
+        </header>
+      )}
 
       <div className="flex flex-1 overflow-hidden relative">
         {/* SIDEBAR */}
@@ -368,410 +280,356 @@ const App: React.FC = () => {
             {[
               { id: 'archive', icon: Library, label: 'The Archive' },
               { id: 'ideate', icon: Sparkles, label: 'Ideation' },
-              { id: 'style', icon: Settings2, label: 'Cast & Style' },
+              { id: 'style', icon: Users, label: 'Cast & Style' },
               { id: 'write', icon: Wand2, label: 'Studio' }
             ].map(s => (
-              <button 
-                key={s.id} 
-                onClick={() => { setStep(s.id as AppStep); setMobileMenuOpen(false); }} 
-                className={`w-full flex items-center gap-3 px-5 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${step === s.id ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
-              >
+              <button key={s.id} onClick={() => { setStep(s.id as AppStep); setMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 px-5 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${step === s.id ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}>
                 <s.icon size={16} /> {s.label}
               </button>
             ))}
           </div>
-
-          {step !== 'archive' && novel.outline.length > 0 && (
-             <div className="flex-1 overflow-y-auto custom-scrollbar">
-               <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-4 flex items-center gap-2"><History size={12}/> Storyline</p>
-               <div className="space-y-1">
+          {step !== 'archive' && (
+             <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col">
+               <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-4 flex items-center gap-2"><History size={12}/> Story Beats</p>
+               <div className="space-y-1 flex-1">
                  {novel.outline.map((t, i) => (
-                   <button 
-                    key={i} 
-                    onClick={() => { setActiveChapter(i); setStep('write'); }} 
-                    className={`w-full text-left p-3 rounded-xl text-[10px] font-bold transition-all border group ${activeChapter === i && step === 'write' ? 'bg-indigo-50 text-indigo-700 border-indigo-100' : 'text-slate-400 border-transparent hover:bg-slate-50'}`}
-                   >
-                     <div className="flex flex-col gap-0.5">
-                       <span className="text-[7px] opacity-40 uppercase">Ch. {i + 1}</span>
-                       <span className="truncate">{t}</span>
-                       {novel.chapters[i] && <div className="mt-1 w-full h-0.5 bg-indigo-500 rounded-full" />}
+                   <button key={i} onClick={() => { setActiveChapter(i); setStep('write'); }} className={`w-full text-left p-3 rounded-xl text-[10px] font-bold transition-all border group ${activeChapter === i && step === 'write' ? 'bg-indigo-50 text-indigo-700 border-indigo-100' : 'text-slate-400 border-transparent hover:bg-slate-50'}`}>
+                     <div className="flex justify-between items-center">
+                       <span className="truncate pr-2">{t}</span>
+                       {novel.chapters[i] && <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />}
                      </div>
                    </button>
                  ))}
                </div>
+               <button onClick={() => setNovel(p => ({...p, outline: [...p.outline, `New Beat ${p.outline.length + 1}`]}))} className="mt-4 flex items-center justify-center gap-2 p-3 rounded-xl border border-dashed border-slate-200 text-[9px] font-black uppercase text-slate-400 hover:text-indigo-600 hover:border-indigo-200 transition-all">
+                 <Plus size={14}/> Add New Beat
+               </button>
              </div>
           )}
         </aside>
 
-        {/* MAIN AREA */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-10 scroll-smooth custom-scrollbar">
-          <div className="max-w-5xl mx-auto w-full pb-20">
+        {/* MAIN CONTENT AREA */}
+        <main className={`flex-1 overflow-y-auto ${isFocusMode ? 'p-0 bg-white' : 'p-4 md:p-10'} scroll-smooth custom-scrollbar relative`}>
+          <div className={`${isFocusMode ? 'max-w-4xl mx-auto min-h-screen flex flex-col' : 'max-w-5xl mx-auto w-full pb-20'}`}>
             
-            {/* STEP 0: THE ARCHIVE */}
+            {/* ARCHIVE STEP */}
             {step === 'archive' && (
-              <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4">
                 <div className="flex flex-col md:flex-row justify-between items-center gap-6">
-                  <div>
-                    <h2 className="text-3xl font-black uppercase tracking-tighter text-slate-900">The Archive</h2>
-                    <p className="text-slate-400 text-sm font-medium mt-1">Manage your collection of AI-crafted manuscripts.</p>
-                  </div>
-                  <button onClick={startNewProject} className="flex items-center gap-3 px-8 py-5 bg-indigo-600 text-white rounded-3xl font-black uppercase text-xs hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100">
-                    <PlusCircle size={20} /> Create New Work
+                  <h2 className="text-3xl font-black uppercase tracking-tighter">The Archive</h2>
+                  <button onClick={() => { setStep('ideate'); setNovel({ ...novel, id: crypto.randomUUID(), title: 'Untitled Project', chapters: {}, outline: [], generatedPremise: '', characters: [{ name: '', role: 'Protagonist', description: '', dialogueStyles: [], personality: [], expressions: [], kinks: [] }] }); }} className="flex items-center gap-3 px-8 py-5 bg-indigo-600 text-white rounded-3xl font-black uppercase text-xs shadow-xl hover:bg-indigo-700 transition-all">
+                    <PlusCircle size={20} /> Create New Project
                   </button>
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {filteredAndSortedArchive.map((item) => (
-                    <div key={item.id} onClick={() => loadNovel(item)} className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-2xl hover:-translate-y-1 transition-all cursor-pointer group flex flex-col h-full relative">
-                      <div className="flex items-center justify-between mb-6">
-                         <span className="px-3 py-1 bg-indigo-50 text-indigo-500 rounded-lg text-[9px] font-black uppercase tracking-widest border border-indigo-100">{item.genre}</span>
-                         <button onClick={(e) => deleteFromArchive(item.id, e)} className="p-2 text-slate-200 hover:text-red-500 transition-colors"><Trash2 size={16}/></button>
-                      </div>
-                      <h4 className="text-xl font-black text-slate-900 mb-3 group-hover:text-indigo-600 transition-colors truncate">{item.title}</h4>
-                      <p className="text-xs font-medium text-slate-400 line-clamp-3 mb-8 flex-1 leading-relaxed">
-                        {item.generatedPremise || item.premise || "No premise drafted yet."}
-                      </p>
-                      <div className="pt-6 border-t border-slate-50 flex items-center justify-between mt-auto">
-                         <div className="flex items-center gap-2 text-[9px] font-black text-slate-300 uppercase tracking-widest">
-                           <Calendar size={12}/> {formatDate(item.lastModified)}
-                         </div>
-                         <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center text-[10px] font-black shadow-lg shadow-slate-200">
-                              {Object.keys(item.chapters).length}
-                            </div>
-                         </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* STEP 1: IDEATE */}
-            {step === 'ideate' && (
-              <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <div className="bg-white rounded-[3rem] border border-slate-100 shadow-sm p-8 md:p-12 space-y-12">
-                  <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-3xl border border-slate-100">
-                    <div className={`p-3 rounded-2xl transition-all ${provider === 'groq' ? 'bg-rose-100 text-rose-600' : 'bg-indigo-100 text-indigo-600'}`}>
-                      <Cpu size={20} />
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-black uppercase tracking-widest opacity-40">Active Engine</p>
-                      <p className="text-sm font-black uppercase">{provider === 'groq' ? 'Llama 3.3 70B (Groq)' : 'Gemini 3 Flash'}</p>
-                    </div>
+                {archive.length === 0 ? (
+                  <div className="bg-white p-20 rounded-[3rem] border border-dashed border-slate-200 flex flex-col items-center justify-center text-center space-y-4">
+                    <Library size={32} className="text-slate-300"/>
+                    <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">No Manuscripts Found</p>
                   </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
-                    <div className="space-y-8">
-                      <div>
-                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Sub-Genre Perspective</label>
-                        <div className="grid grid-cols-2 gap-2">
-                          {genreOptions.map(g => (
-                            <button key={g} onClick={() => setNovel({...novel, genre: g})} className={`text-left px-4 py-3 rounded-2xl text-[10px] font-black border transition-all ${novel.genre === g ? 'bg-indigo-600 text-white border-indigo-600 shadow-lg' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>{g}</button>
-                          ))}
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {filteredArchive.map(item => (
+                      <div key={item.id} onClick={() => { setNovel(item); setStep('write'); }} className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-2xl transition-all cursor-pointer group flex flex-col h-full relative overflow-hidden">
+                        <div className="flex justify-between items-start mb-4 relative z-10">
+                          <span className="text-[9px] font-black bg-indigo-50 text-indigo-500 px-3 py-1 rounded-full uppercase">{item.genre}</span>
+                          <button onClick={(e) => deleteFromArchive(item.id, e)} className="text-slate-200 hover:text-red-500 transition-colors"><Trash2 size={16}/></button>
                         </div>
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block flex items-center gap-2"><Palette size={12}/> Vibe & Tone</label>
-                        <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                          {Object.entries(atmosphereOptions).map(([category, options]) => (
-                            <div key={category} className="space-y-2">
-                              <p className="text-[8px] font-bold text-slate-300 uppercase">{category}</p>
-                              <div className="flex flex-wrap gap-1.5">
-                                {options.map(t => (
-                                  <button key={t} onClick={() => toggleTone(t)} className={`px-3 py-1.5 rounded-xl text-[9px] font-black border transition-all ${novel.tone.includes(t) ? 'bg-indigo-50 text-indigo-600 border-indigo-200' : 'bg-white text-slate-500 border-slate-100'}`}>{t}</button>
-                                ))}
-                              </div>
-                            </div>
-                          ))}
+                        <h4 className="text-xl font-black mb-2 line-clamp-2 relative z-10">{item.title}</h4>
+                        <p className="text-xs text-slate-400 flex-1 line-clamp-3 mb-6 relative z-10">{item.generatedPremise || item.premise}</p>
+                        <div className="pt-4 border-t border-slate-50 flex justify-between items-center relative z-10">
+                          <span className="text-[8px] font-black text-slate-300 uppercase"><Calendar size={10} className="inline mr-1"/> {new Date(item.lastModified).toLocaleDateString()}</span>
+                          <span className="text-[10px] font-black text-indigo-600">{Object.keys(item.chapters).length} Drafts</span>
                         </div>
-                      </div>
-                    </div>
-                    <div className="space-y-8">
-                      <div>
-                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block flex items-center gap-2"><TagIcon size={12}/> Content Tags</label>
-                        <div className="flex flex-wrap gap-1.5 bg-slate-50 p-5 rounded-3xl border border-slate-100">
-                          {tagOptions.map(tag => (
-                            <button key={tag} onClick={() => toggleTag(tag)} className={`px-3 py-1.5 rounded-full text-[9px] font-black border transition-all ${novel.tags.includes(tag) ? 'bg-white text-indigo-600 border-indigo-100 shadow-sm' : 'bg-transparent text-slate-400 border-transparent hover:border-slate-200'}`}>
-                              {tag}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="pt-4">
-                        <button onClick={() => setNovel({...novel, isR18: !novel.isR18})} className={`w-full p-6 rounded-[2rem] border-2 transition-all group flex items-center justify-between ${novel.isR18 ? 'bg-red-50 border-red-500 text-red-600' : 'bg-slate-50 text-slate-400 border-slate-100'}`}>
-                          <div className="text-left">
-                            <span className="text-[10px] font-black uppercase tracking-widest block">Unfiltered Mode (R18)</span>
-                            <span className="text-[9px] font-bold opacity-60">Allows explicit content</span>
-                          </div>
-                          <Flame size={20} className={novel.isR18 ? 'text-red-500 animate-pulse' : 'text-slate-300'} />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="pt-8 border-t">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Original Concept</label>
-                    <textarea value={novel.premise} onChange={(e) => setNovel({...novel, premise: e.target.value})} className="w-full p-8 rounded-[2.5rem] border-2 border-slate-50 bg-slate-50 text-lg font-medium min-h-[150px] outline-none focus:border-indigo-100 focus:bg-white transition-all shadow-inner" placeholder="Tell the architect your story's soul..." />
-                  </div>
-
-                  <button onClick={handleGenerateOutline} disabled={loading} className="w-full bg-slate-900 text-white py-6 rounded-[2rem] font-black text-lg hover:bg-indigo-600 transition-all flex items-center justify-center gap-3 shadow-2xl">
-                    {loading ? <Loader2 className="animate-spin" /> : <Sparkles />} Map the Narrative Arc
-                  </button>
-
-                  {novel.generatedPremise && (
-                    <div className="p-10 bg-indigo-50/50 rounded-[3rem] border border-indigo-100 animate-in slide-in-from-bottom-4">
-                      <h4 className="text-[10px] font-black uppercase tracking-widest text-indigo-400 mb-6 flex items-center gap-2"><BookMarked size={14}/> The Blueprint</h4>
-                      <p className="text-slate-800 leading-relaxed font-semibold text-xl mb-10 whitespace-pre-wrap">{novel.generatedPremise}</p>
-                      <button onClick={() => setStep('style')} className="w-full bg-indigo-600 text-white py-5 rounded-2xl font-black flex items-center justify-center gap-2 hover:bg-indigo-700 shadow-xl uppercase text-sm">Proceed to Cast <ChevronRight size={18}/></button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* STEP 2: STYLE & CAST */}
-            {step === 'style' && (
-              <div className="space-y-8 animate-in fade-in duration-500">
-                <div className="bg-white rounded-[3rem] p-10 border border-slate-100 shadow-sm space-y-12">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-xl font-black uppercase tracking-tighter flex items-center gap-3"><Users className="text-indigo-600" /> Casting Ledger</h2>
-                    <button onClick={() => setNovel(p => ({ ...p, characters: [...p.characters, { name: '', role: 'Protagonist', description: '', dialogueStyles: [], personality: [], expressions: [], kinks: [] }] }))} className="flex items-center gap-2 px-5 py-2.5 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase hover:bg-indigo-600 transition-all shadow-lg">
-                      <UserPlus size={14}/> New Character
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-12">
-                    {novel.characters.map((char, idx) => (
-                      <div key={idx} className="p-8 md:p-12 bg-slate-50/50 rounded-[3rem] border border-slate-100 relative group transition-all hover:bg-white hover:shadow-xl space-y-10">
-                        <button onClick={() => { if (novel.characters.length <= 1) return; setNovel(p => ({ ...p, characters: p.characters.filter((_, i) => i !== idx) })); }} className="absolute top-8 right-8 p-3 text-slate-300 hover:text-red-500 transition-colors">
-                          <Trash2 size={22} />
-                        </button>
-                        
-                        {/* CHARACTER IDENTITY */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                          <div className="space-y-2">
-                             <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest ml-1">Identity Name</label>
-                             <input value={char.name} onChange={(e) => updateCharacter(idx, 'name', e.target.value)} placeholder="e.g., Sebastian Vance" className="w-full p-4 bg-white rounded-2xl border border-transparent focus:border-indigo-100 outline-none font-bold text-sm shadow-sm" />
-                          </div>
-                          <div className="space-y-2">
-                             <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest ml-1">Narrative Role</label>
-                             <select value={char.role} onChange={(e) => updateCharacter(idx, 'role', e.target.value)} className="w-full p-4 bg-white rounded-2xl border border-transparent focus:border-indigo-100 outline-none font-bold text-sm shadow-sm">
-                               <option>Protagonist</option>
-                               <option>Love Interest</option>
-                               <option>Antagonist</option>
-                               <option>Side Character</option>
-                               <option>Catalyst</option>
-                             </select>
-                          </div>
-                        </div>
-
-                        {/* CHARACTER DESCRIPTION */}
-                        <div className="space-y-2">
-                          <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest ml-1">Physicality & Essence</label>
-                          <textarea value={char.description} onChange={(e) => updateCharacter(idx, 'description', e.target.value)} placeholder="Describe their physicality, scent, flaws, and secrets..." className="w-full p-6 bg-white rounded-[2rem] border border-transparent focus:border-indigo-100 outline-none text-xs min-h-[140px] shadow-sm resize-none leading-relaxed" />
-                        </div>
-
-                        {/* PERSONALITY TRAITS */}
-                        <div className="space-y-4">
-                          <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest ml-1 flex items-center gap-2"><Brain size={12} className="text-indigo-400"/> Core Persona Archetypes</label>
-                          <div className="flex flex-wrap gap-2">
-                            {personalityPresets.map(trait => (
-                              <button 
-                                key={trait} 
-                                onClick={() => toggleCharList(idx, 'personality', trait)} 
-                                className={`px-4 py-2 rounded-xl text-[9px] font-black border transition-all ${char.personality.includes(trait) ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-400 border-slate-100 hover:border-indigo-100'}`}
-                              >
-                                {trait}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* DIALOGUE VOICE */}
-                        <div className="space-y-4">
-                          <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest ml-1 flex items-center gap-2"><MessageSquare size={12} className="text-indigo-400"/> Dialogue & Voice Tone</label>
-                          <div className="flex flex-wrap gap-2">
-                            {dialoguePresets.map(voice => (
-                              <button 
-                                key={voice} 
-                                onClick={() => toggleCharList(idx, 'dialogueStyles', voice)} 
-                                className={`px-4 py-2 rounded-xl text-[9px] font-black border transition-all ${char.dialogueStyles.includes(voice) ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-400 border-slate-100 hover:border-indigo-100'}`}
-                              >
-                                {voice}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* INTIMATE PROFILE (FLAME LAYER) */}
-                        <div className={`p-8 rounded-[2.5rem] border transition-all space-y-8 ${novel.isR18 ? 'bg-rose-50/50 border-rose-100' : 'bg-slate-100/50 border-slate-200'}`}>
-                           <div className="flex items-center gap-2">
-                             <div className={`p-2 rounded-lg ${novel.isR18 ? 'bg-rose-100 text-rose-600' : 'bg-slate-200 text-slate-400'}`}><Flame size={16}/></div>
-                             <p className={`text-[10px] font-black uppercase tracking-widest ${novel.isR18 ? 'text-rose-600' : 'text-slate-400'}`}>Intimate Behavioral Profile</p>
-                           </div>
-
-                           <div className="space-y-6">
-                              <div className="space-y-3">
-                                <label className="text-[8px] font-black uppercase text-slate-300 tracking-[0.2em] ml-1">Vocal & Sensory Expressions</label>
-                                <div className="flex flex-wrap gap-2">
-                                  {expressionPresets.map(expr => (
-                                    <button 
-                                      key={expr} 
-                                      onClick={() => toggleCharList(idx, 'expressions', expr)} 
-                                      className={`px-3 py-1.5 rounded-lg text-[8px] font-black border transition-all ${char.expressions.includes(expr) ? 'bg-rose-500 text-white border-rose-500' : 'bg-white text-slate-400 border-slate-100'}`}
-                                    >
-                                      {expr}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-
-                              <div className="space-y-3">
-                                <label className="text-[8px] font-black uppercase text-slate-300 tracking-[0.2em] ml-1">Kinks & Desired Dynamics</label>
-                                <div className="flex flex-wrap gap-2">
-                                  {kinkPresets.map(kink => (
-                                    <button 
-                                      key={kink} 
-                                      onClick={() => toggleCharList(idx, 'kinks', kink)} 
-                                      className={`px-3 py-1.5 rounded-lg text-[8px] font-black border transition-all ${char.kinks.includes(kink) ? 'bg-rose-500 text-white border-rose-500' : 'bg-white text-slate-400 border-slate-100'}`}
-                                    >
-                                      {kink}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                           </div>
-                        </div>
+                        {item.isR18 && <div className="absolute -right-6 -bottom-6 opacity-[0.03] rotate-12"><Flame size={120}/></div>}
                       </div>
                     ))}
                   </div>
+                )}
+              </div>
+            )}
 
-                  <button onClick={() => handleGenerateChapter(0)} disabled={loading} className="w-full bg-slate-900 text-white py-6 rounded-[2rem] font-black text-lg hover:bg-indigo-600 transition-all shadow-2xl flex items-center justify-center gap-3">
-                    {loading ? <Loader2 className="animate-spin" /> : <PenTool size={20} />} Commit Cast to Studio
-                  </button>
+            {/* IDEATE STEP */}
+            {step === 'ideate' && (
+              <div className="space-y-12 animate-in slide-in-from-bottom-4">
+                <div className="bg-white rounded-[3rem] border border-slate-100 shadow-sm p-8 md:p-12 space-y-12">
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+                     <div className="space-y-8">
+                       <div>
+                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Genre Select</label>
+                         <div className="grid grid-cols-2 gap-2">
+                           {genreOptions.map(g => (
+                             <button key={g} onClick={() => setNovel({...novel, genre: g})} className={`text-left px-4 py-3 rounded-2xl text-[10px] font-black border transition-all ${novel.genre === g ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>{g}</button>
+                           ))}
+                         </div>
+                       </div>
+                       <div>
+                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Atmospheric Tags</label>
+                         <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                           {Object.entries(atmosphereOptions).map(([cat, opts]) => (
+                             <div key={cat} className="space-y-2">
+                               <p className="text-[8px] font-bold text-slate-300 uppercase">{cat}</p>
+                               <div className="flex flex-wrap gap-1.5">
+                                 {opts.map((t: any) => (
+                                   <button key={t} onClick={() => setNovel(p => ({ ...p, tone: p.tone.includes(t) ? p.tone.filter(x => x !== t) : [...p.tone, t] }))} className={`px-3 py-1.5 rounded-xl text-[9px] font-black border transition-all ${novel.tone.includes(t) ? 'bg-indigo-50 text-indigo-600 border-indigo-200' : 'bg-white text-slate-500 border-slate-100'}`}>{t}</button>
+                                 ))}
+                               </div>
+                             </div>
+                           ))}
+                         </div>
+                       </div>
+                     </div>
+                     <div className="space-y-8">
+                       <button onClick={() => setNovel({...novel, isR18: !novel.isR18})} className={`w-full p-6 rounded-3xl border-2 transition-all flex items-center justify-between ${novel.isR18 ? 'bg-red-50 border-red-500 text-red-600' : 'bg-slate-50 text-slate-400 border-slate-100'}`}>
+                         <div className="text-left"><span className="text-[10px] font-black uppercase block">Unfiltered Mode (R18)</span><span className="text-[8px] opacity-60">Visceral sensory immersion</span></div>
+                         <Flame size={20} className={novel.isR18 ? 'text-red-500 animate-pulse' : 'text-slate-300'} />
+                       </button>
+                     </div>
+                   </div>
+                   <div className="pt-8 border-t">
+                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Core Concept Seed</label>
+                     <textarea value={novel.premise} onChange={(e) => setNovel({...novel, premise: e.target.value})} className="w-full p-8 rounded-[2rem] bg-slate-50 text-lg font-medium min-h-[150px] outline-none border-2 border-transparent focus:border-indigo-100 focus:bg-white transition-all custom-scrollbar" placeholder="Start your story here..." />
+                   </div>
+                   <button onClick={handleGenerateOutline} disabled={loading} className="w-full bg-slate-900 text-white py-6 rounded-3xl font-black text-lg hover:bg-indigo-600 transition-all shadow-2xl flex items-center justify-center gap-3">
+                     {loading ? <Loader2 className="animate-spin" /> : <Sparkles />} Construct Blueprint
+                   </button>
+                   {novel.generatedPremise && (
+                     <div className="p-10 bg-indigo-50/50 rounded-[3rem] border border-indigo-100 animate-in slide-in-from-bottom-4">
+                       <p className="text-slate-800 leading-relaxed font-semibold text-xl mb-10 whitespace-pre-wrap">{novel.generatedPremise}</p>
+                       <button onClick={() => setStep('style')} className="w-full bg-indigo-600 text-white py-5 rounded-2xl font-black shadow-xl uppercase text-sm">Proceed to Casting <ChevronRight size={18} className="inline ml-2"/></button>
+                     </div>
+                   )}
                 </div>
               </div>
             )}
 
-            {/* STEP 3: WRITING STUDIO */}
-            {step === 'write' && (
-              <div className="flex flex-col xl:flex-row gap-8 animate-in fade-in slide-in-from-right-4 duration-700">
-                <div className="flex-1 bg-white rounded-[3rem] border border-slate-100 shadow-2xl flex flex-col overflow-hidden min-h-[85vh]">
-                  <div className="p-8 border-b bg-slate-50/50 flex flex-col md:flex-row justify-between items-center gap-6">
-                    <div className="flex items-center gap-6">
-                      <div className={`w-14 h-14 rounded-[1.5rem] flex items-center justify-center text-white font-black text-xl shadow-lg ${provider === 'groq' ? 'bg-rose-600' : 'bg-slate-900'}`}>{activeChapter + 1}</div>
-                      <div>
-                        <h3 className="font-black text-slate-900 text-lg">{novel.outline[activeChapter]}</h3>
-                        <div className="flex items-center gap-3 mt-1">
-                          <span className="text-[9px] font-black text-indigo-500 uppercase bg-indigo-50 px-2 py-0.5 rounded-md">{provider === 'groq' ? 'Llama 3.3 Engine' : 'Gemini Engine'}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <button onClick={() => handleGenerateChapter(activeChapter, true, "")} disabled={loading} className="flex items-center gap-2 px-5 py-3 rounded-2xl bg-white border border-slate-100 text-[10px] font-black uppercase text-slate-500 hover:text-indigo-600 transition-all shadow-sm">
-                      {loading ? <Loader2 size={14} className="animate-spin"/> : <RotateCcw size={14}/>} Rewrite
-                    </button>
-                  </div>
-                  <textarea 
-                    value={novel.chapters[activeChapter] || ""} 
-                    onChange={(e) => {
-                      const updated = { ...novel, chapters: { ...novel.chapters, [activeChapter]: e.target.value }, lastModified: Date.now() };
-                      setNovel(updated);
-                    }}
-                    className="flex-1 p-10 md:p-16 text-xl leading-[1.8] outline-none font-serif font-medium resize-none bg-transparent selection:bg-indigo-100"
-                    placeholder="The ink begins to flow..."
-                    style={{ minHeight: '60vh' }}
-                  />
-                  <div className="p-8 border-t bg-slate-50/50 flex flex-wrap justify-between items-center gap-4">
-                    <button disabled={activeChapter === 0} onClick={() => setActiveChapter(activeChapter - 1)} className="flex items-center gap-2 px-6 py-4 rounded-2xl bg-white border border-slate-100 font-black text-[10px] uppercase text-slate-400 hover:text-slate-900 disabled:opacity-20 transition-all"><ChevronLeft size={16}/> Back</button>
-                    <button 
-                      onClick={() => {
-                        const next = activeChapter + 1;
-                        if (novel.chapters[next]) setActiveChapter(next);
-                        else handleGenerateChapter(next, false, "");
-                      }} 
-                      disabled={activeChapter === 11 || loading}
-                      className="flex items-center gap-2 px-8 py-4 rounded-2xl bg-indigo-600 font-black text-[10px] uppercase text-white hover:bg-indigo-700 shadow-xl disabled:opacity-50 transition-all"
-                    >
-                      {loading ? "Constructing..." : "Bridge Next Chapter"} <ChevronRight size={16}/>
-                    </button>
-                  </div>
+            {/* STYLE STEP */}
+            {step === 'style' && (
+              <div className="bg-white rounded-[3rem] p-10 border border-slate-100 shadow-sm space-y-12 animate-in fade-in">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-3xl font-black uppercase tracking-tighter flex items-center gap-3"><Users className="text-indigo-600" /> Casting Ledger</h2>
+                  <button onClick={() => setNovel({...novel, characters: [...novel.characters, { name: '', role: 'Protagonist', description: '', dialogueStyles: [], personality: [], expressions: [], kinks: [] }]})} className="px-6 py-3 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase hover:bg-indigo-600 transition-all flex items-center gap-2 shadow-lg"><UserPlus size={14}/> New Character</button>
                 </div>
 
-                {/* SIDEBAR TOOLS */}
-                <div className="w-full xl:w-96 space-y-8">
-                  <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                    <h4 className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-indigo-500 mb-8 border-b border-indigo-50 pb-4">
-                      <Lightbulb size={14}/> Continuity Spark
-                    </h4>
-                    <div className="space-y-4">
-                      {novel.aiSuggestions[activeChapter]?.map((s, i) => (
-                        <div key={i} className="p-5 bg-indigo-50/30 rounded-2xl border border-indigo-100/50 text-[11px] font-semibold text-slate-700 leading-relaxed flex gap-3 animate-in fade-in slide-in-from-top-2">
-                           <CheckCircle2 size={16} className="text-indigo-400 shrink-0 mt-0.5" /> {s}
+                <div className="grid grid-cols-1 gap-12">
+                  {novel.characters.map((char, idx) => (
+                    <div key={idx} className="p-10 bg-slate-50/40 rounded-[3rem] border border-slate-100 space-y-10 relative group transition-all hover:bg-white hover:shadow-2xl">
+                      <button onClick={() => setNovel({...novel, characters: novel.characters.filter((_, i) => i !== idx)})} className="absolute top-8 right-8 text-slate-200 hover:text-rose-500 transition-colors"><Trash2 size={20}/></button>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Name</label>
+                          <input value={char.name} onChange={(e) => updateCharacterField(idx, 'name', e.target.value)} className="w-full p-5 bg-white rounded-2xl border border-transparent focus:border-indigo-200 outline-none font-bold text-lg shadow-sm" placeholder="Character Name"/>
                         </div>
-                      ))}
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Role</label>
+                          <select value={char.role} onChange={(e) => updateCharacterField(idx, 'role', e.target.value)} className="w-full p-5 bg-white rounded-2xl border border-transparent focus:border-indigo-200 outline-none font-bold text-lg shadow-sm">
+                            <option>Protagonist</option>
+                            <option>Love Interest</option>
+                            <option>Antagonist</option>
+                            <option>Side Character</option>
+                            <option>Mentor</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Physicality & Essence</label>
+                        <textarea value={char.description} onChange={(e) => updateCharacterField(idx, 'description', e.target.value)} className="w-full p-6 bg-white rounded-2xl border border-transparent focus:border-indigo-200 outline-none text-sm min-h-[100px] shadow-sm resize-none custom-scrollbar" placeholder="Appearance, vibe..."/>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+                        <div className="space-y-4">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Archetypes</label>
+                          <div className="flex flex-wrap gap-2">
+                            {personaArchetypes.map(v => (
+                              <button key={v} onClick={() => toggleList(idx, 'personality', v)} className={`px-4 py-2 rounded-xl text-[10px] font-bold border transition-all ${char.personality?.includes(v) ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-400 border-slate-100 hover:border-slate-300'}`}>{v}</button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="space-y-4">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Voice Tone</label>
+                          <div className="flex flex-wrap gap-2">
+                            {dialogueTones.map(v => (
+                              <button key={v} onClick={() => toggleList(idx, 'dialogueStyles', v)} className={`px-4 py-2 rounded-xl text-[10px] font-bold border transition-all ${char.dialogueStyles?.includes(v) ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-400 border-slate-100 hover:border-slate-300'}`}>{v}</button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                      {novel.isR18 && (
+                        <div className="pt-8 border-t border-slate-100 space-y-10 animate-in fade-in">
+                          <div className="flex items-center gap-3 text-rose-500"><ShieldAlert size={18} /><h4 className="text-[11px] font-black uppercase tracking-widest">Behavioral Profile</h4></div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+                            <div className="space-y-4">
+                              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Vocal Expressions</label>
+                              <div className="flex flex-wrap gap-2">
+                                {sensoryExpressions.map(v => (
+                                  <button key={v} onClick={() => toggleList(idx, 'expressions', v)} className={`px-4 py-2 rounded-xl text-[10px] font-bold border transition-all ${char.expressions?.includes(v) ? 'bg-rose-500 text-white border-rose-500 shadow-md' : 'bg-white text-slate-400 border-slate-100 hover:border-slate-300'}`}>{v}</button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="space-y-4">
+                              <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Kinks & Dynamics</label>
+                              <div className="flex flex-wrap gap-2">
+                                {kinkDynamics.map(v => (
+                                  <button key={v} onClick={() => toggleList(idx, 'kinks', v)} className={`px-4 py-2 rounded-xl text-[10px] font-bold border transition-all ${char.kinks?.includes(v) ? 'bg-rose-500 text-white border-rose-500 shadow-md' : 'bg-white text-slate-400 border-slate-100 hover:border-slate-300'}`}>{v}</button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => setStep('write')} className="w-full bg-slate-900 text-white py-6 rounded-3xl font-black text-xl hover:bg-indigo-600 transition-all flex items-center justify-center gap-3">
+                  <CheckCircle2 /> Commit to Studio
+                </button>
+              </div>
+            )}
+
+            {/* WRITE STEP (STUDIO) */}
+            {step === 'write' && (
+              <div className={`flex flex-col ${isFocusMode ? '' : 'xl:flex-row'} gap-8 animate-in slide-in-from-right-4 h-full`}>
+                <div className={`flex-1 bg-white flex flex-col ${isFocusMode ? 'min-h-screen' : 'rounded-[3rem] border border-slate-100 shadow-2xl min-h-[85vh] overflow-hidden'}`}>
+                  {/* Studio Template Header - Pure White */}
+                  <div className={`p-8 border-b bg-white flex flex-col md:flex-row justify-between items-center gap-6 ${isFocusMode ? 'sticky top-0 z-30 backdrop-blur-md' : ''}`}>
+                    <div className="flex items-center gap-4">
+                       <div className="w-12 h-12 bg-slate-900 text-white rounded-2xl flex items-center justify-center font-black shadow-lg">{activeChapter + 1}</div>
+                       <div className="flex flex-col">
+                          <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">Active Beat</span>
+                          <h3 className="font-black text-slate-900 text-lg leading-tight">{novel.outline[activeChapter]}</h3>
+                       </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button onClick={handlePolishProse} title="Polish Prose" disabled={polishLoading || !novel.chapters[activeChapter]} className="flex items-center gap-2 p-3 rounded-2xl bg-white border text-rose-500 hover:bg-rose-50 transition-all shadow-sm">
+                        {polishLoading ? <Loader2 size={18} className="animate-spin" /> : <Highlighter size={18}/>}
+                      </button>
+                      <button onClick={() => setIsFocusMode(!isFocusMode)} title="Toggle Focus Mode" className="flex items-center gap-2 p-3 rounded-2xl bg-white border text-slate-500 hover:text-indigo-600 transition-all shadow-sm">
+                        {isFocusMode ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}
+                      </button>
+                      <button onClick={() => handleGenerateChapter(activeChapter, true)} title="Regenerate Draft" disabled={loading} className="p-3 rounded-2xl bg-white border text-slate-400 hover:text-indigo-600 transition-all shadow-sm"><RotateCcw size={18}/></button>
                     </div>
                   </div>
                   
-                  <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white shadow-2xl">
-                     <p className="text-[9px] font-black uppercase tracking-[0.3em] opacity-40 mb-6 flex items-center gap-2"><Mic2 size={14}/> Narrator Directives</p>
-                     <div className="space-y-6">
-                        <textarea value={sceneBlueprint} onChange={(e) => setSceneBlueprint(e.target.value)} placeholder="Key plot points for this scene..." className="w-full p-4 bg-white/5 rounded-2xl text-[11px] font-semibold outline-none border border-white/10 focus:border-indigo-400 transition-all placeholder:text-white/20 min-h-[80px] resize-none" />
-                        <div className="relative">
-                           <textarea value={customDirective} onChange={(e) => setCustomDirective(e.target.value)} placeholder="Tone adjustment or prose directive..." className="w-full p-4 bg-white/5 rounded-2xl text-[11px] font-semibold outline-none border border-white/10 focus:border-indigo-400 transition-all placeholder:text-white/20 min-h-[80px] resize-none pr-12" />
-                           <button onClick={() => handleGenerateChapter(activeChapter, true, customDirective)} disabled={loading} className="absolute right-3 bottom-3 p-3 bg-indigo-500 rounded-xl text-white hover:bg-indigo-400 transition-all shadow-lg">
-                              <Send size={14} />
-                           </button>
-                        </div>
-                     </div>
+                  {/* Writing Surface */}
+                  <textarea 
+                    value={novel.chapters[activeChapter] || ""} 
+                    onChange={(e) => setNovel({...novel, chapters: {...novel.chapters, [activeChapter]: e.target.value}})}
+                    className={`flex-1 p-10 md:p-16 text-xl leading-[2] outline-none font-serif font-medium resize-none selection:bg-indigo-100 custom-scrollbar ${isFocusMode ? 'max-w-2xl mx-auto w-full' : ''} bg-white`}
+                    placeholder="Ink flowing..."
+                    spellCheck={false}
+                  />
+                  
+                  {/* Studio Template Footer - Pure White */}
+                  <div className={`p-8 border-t bg-white flex flex-col md:flex-row justify-between items-center gap-6 ${isFocusMode ? 'sticky bottom-0 z-30' : ''}`}>
+                    <div className="flex gap-8 text-[10px] font-black uppercase text-slate-400">
+                      <span>{wordCount} Words</span>
+                      <span>~{readingTime} min read</span>
+                    </div>
+                    <div className="flex gap-4">
+                      <button onClick={() => setActiveChapter(activeChapter - 1)} disabled={activeChapter === 0} className="px-6 py-4 rounded-2xl bg-white border text-slate-400 hover:text-slate-900 disabled:opacity-20 transition-all shadow-sm"><ChevronLeft size={16}/></button>
+                      <button onClick={() => { if (novel.chapters[activeChapter + 1]) setActiveChapter(activeChapter + 1); else handleGenerateChapter(activeChapter + 1); }} disabled={loading} className="px-8 py-4 rounded-2xl bg-indigo-600 font-black text-[10px] uppercase text-white shadow-xl hover:bg-indigo-700 transition-all">
+                        {loading ? <Loader2 className="animate-spin mr-2" size={14}/> : (novel.chapters[activeChapter + 1] ? "Next Beat" : "Construct Next")} <ChevronRight size={16} className="inline ml-2"/>
+                      </button>
+                    </div>
                   </div>
                 </div>
+
+                {!isFocusMode && (
+                  <div className="w-full xl:w-96 space-y-8 h-fit">
+                    {/* SENSORY ARCHITECT PANEL */}
+                    <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm overflow-hidden group">
+                      <div className="flex justify-between items-center mb-8 border-b pb-4">
+                        <h4 className="text-[10px] font-black uppercase text-rose-500 flex items-center gap-2"><Wind size={14}/> Sensory Architect</h4>
+                        <button onClick={handleInfuseSensory} disabled={sensoryLoading} className="p-2 bg-rose-50 text-rose-500 rounded-xl hover:bg-rose-500 hover:text-white transition-all">
+                          {sensoryLoading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                        </button>
+                      </div>
+                      <div className="space-y-4">
+                        {sensorySparks ? (
+                          <div className="grid grid-cols-1 gap-3">
+                            {[
+                              { icon: Eye, label: 'Sight', color: 'text-blue-500', value: sensorySparks.sight },
+                              { icon: Volume2, label: 'Sound', color: 'text-indigo-500', value: sensorySparks.sound },
+                              { icon: Wind, label: 'Smell', color: 'text-emerald-500', value: sensorySparks.smell },
+                              { icon: Fingerprint, label: 'Touch', color: 'text-amber-500', value: sensorySparks.touch },
+                              { icon: Coffee, label: 'Taste', color: 'text-rose-500', value: sensorySparks.taste },
+                            ].map((item, i) => (
+                              <div key={i} className="p-4 bg-slate-50 rounded-2xl border hover:border-slate-200 group/spark transition-all">
+                                <div className="flex justify-between items-center mb-2">
+                                  <span className={`text-[8px] font-black uppercase flex items-center gap-1.5 ${item.color}`}><item.icon size={10}/> {item.label}</span>
+                                  <button onClick={() => copyToClipboard(item.value)} className="opacity-0 group-hover/spark:opacity-100 text-slate-400 hover:text-indigo-600"><Copy size={12}/></button>
+                                </div>
+                                <p className="text-[11px] font-medium leading-relaxed text-slate-600 italic">"{item.value}"</p>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-[10px] text-slate-300 font-bold uppercase italic text-center py-4">Request sensory details.</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
         </main>
-
-        {/* CONSULTANT CHAT (BRAINSTORM) */}
-        {showBrainstorm && (
-          <aside className="fixed inset-y-0 right-0 w-full sm:w-[450px] bg-white border-l shadow-2xl z-[60] flex flex-col animate-in slide-in-from-right duration-500">
-            <div className="p-8 border-b bg-slate-900 text-white flex justify-between items-center">
-              <div className="flex items-center gap-3">
-                <div className="bg-indigo-500 p-2 rounded-xl"><Wand2 size={18}/></div>
-                <h3 className="font-black uppercase tracking-widest text-xs">Architect AI Consultant</h3>
-              </div>
-              <button onClick={() => setShowBrainstorm(false)} className="p-2 text-white/50 hover:text-white transition-colors"><X size={20} /></button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-8 space-y-8 bg-slate-50/50 custom-scrollbar">
-              {chatHistory.map((m, i) => (
-                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[90%] p-6 rounded-[2rem] text-[13px] font-medium leading-relaxed shadow-sm ${m.role === 'user' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-700 border border-slate-100'}`}>
-                    {m.text}
-                  </div>
-                </div>
-              ))}
-              {loading && <div className="text-[10px] font-black uppercase text-indigo-500 animate-pulse tracking-widest">Architect is thinking...</div>}
-            </div>
-            <div className="p-8 border-t bg-white">
-              <div className="relative">
-                <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendChatMessage()} className="w-full pl-6 pr-16 py-5 bg-slate-50 rounded-[2rem] text-[13px] font-semibold outline-none focus:bg-white border-2 border-transparent focus:border-indigo-100 transition-all shadow-inner" placeholder="Ask for advice..." />
-                <button onClick={sendChatMessage} className="absolute right-2 top-2 p-4 bg-slate-900 text-white rounded-[1.5rem] hover:bg-indigo-600 transition-all shadow-lg"><Send size={18} /></button>
-              </div>
-            </div>
-          </aside>
-        )}
       </div>
 
-      {/* SYNC FOOTER */}
-      <footer className="bg-white/80 backdrop-blur-md border-t px-8 py-3 text-[9px] font-[900] text-slate-300 uppercase tracking-[0.4em] flex justify-between items-center z-50">
-        <div className="flex gap-12">
-          <div className="flex items-center gap-2"><div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-sm" /> ARCHIVE SECURED</div>
-          <div className="hidden md:block">LOC: {activeChapter + 1} / 12 CHAPTERS</div>
-          <div className="flex items-center gap-2 text-indigo-500">
-            <Cpu size={10} /> ENGINE: {provider.toUpperCase()}
+      {/* STORY CONSULTANT (RESOURCE) */}
+      <div className={`fixed inset-y-0 right-0 z-[60] w-[400px] bg-white border-l shadow-2xl transition-transform flex flex-col ${showBrainstorm ? 'translate-x-0' : 'translate-x-full'}`}>
+        <div className="p-6 border-b flex justify-between items-center bg-slate-900 text-white">
+          <div className="flex items-center gap-3">
+            <MessageSquarePlus size={20} className="text-indigo-400" />
+            <h4 className="text-[11px] font-black uppercase tracking-widest">Story Consultant</h4>
+          </div>
+          <button onClick={() => setShowBrainstorm(false)} className="p-1 hover:bg-slate-800 rounded-lg transition-all"><X size={20}/></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar bg-slate-50">
+          {chatHistory.length === 0 ? (
+            <div className="text-center py-10">
+              <Lightbulb className="mx-auto text-indigo-300 mb-4" size={32}/>
+              <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest leading-relaxed">Ask the Architect about pacing, character beats, or thematic resonance.</p>
+            </div>
+          ) : (
+            chatHistory.map((m, i) => (
+              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[85%] p-4 rounded-2xl text-xs leading-relaxed shadow-sm ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-white border text-slate-700 rounded-tl-none'}`}>
+                  {m.text}
+                </div>
+              </div>
+            ))
+          )}
+          <div ref={chatEndRef} />
+        </div>
+        <div className="p-6 border-t bg-white">
+          <div className="relative">
+            <input 
+              value={chatInput} 
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && sendChatMessage()}
+              className="w-full p-4 pr-12 rounded-xl bg-slate-100 border-none outline-none text-xs font-medium focus:ring-2 focus:ring-indigo-100 transition-all"
+              placeholder="Query the architect..."
+            />
+            <button 
+              onClick={sendChatMessage}
+              disabled={loading || !chatInput.trim()}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-30 transition-all"
+            >
+              {loading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+            </button>
           </div>
         </div>
-        <div className="text-indigo-600 flex items-center gap-2">VER: 09.2025.A</div>
-      </footer>
+      </div>
+
+      {/* FOOTER */}
+      {!isFocusMode && (
+        <footer className="bg-white border-t px-8 py-3 text-[9px] font-[900] text-slate-300 uppercase tracking-[0.4em] flex justify-between items-center z-50">
+          <div className="flex gap-12">
+            <div className="flex items-center gap-2"><div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-sm" /> ARCHIVE SECURED</div>
+            <div className="flex items-center gap-2 text-indigo-500 uppercase"><Cpu size={10} /> {provider} Engine ACTIVE</div>
+          </div>
+          <div className="text-indigo-600 flex items-center gap-2">VER: 09.2025.A <span className="opacity-30">|</span> UNLIMITED ARC</div>
+        </footer>
+      )}
     </div>
   );
 };
