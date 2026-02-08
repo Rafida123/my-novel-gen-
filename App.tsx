@@ -5,7 +5,7 @@ import {
   Library, Save, PlusCircle, RotateCcw, ChevronLeft, ChevronRight,
   History, Settings2, Trash2, Mic2, Lightbulb, CheckCircle2, X, Plus, 
   UserPlus, Users, Palette, Tag as TagIcon, Flame, Calendar, Cpu, 
-  AlertTriangle, Key, ExternalLink, Menu, Eye, Volume2, Wind, Fingerprint, Coffee, Copy, Maximize2, Minimize2, Highlighter, ShieldAlert
+  AlertTriangle, Key, ExternalLink, Menu, Eye, Volume2, Wind, Fingerprint, Coffee, Copy, Maximize2, Minimize2, Highlighter, ShieldAlert, Lock
 } from 'lucide-react';
 
 // Core State & Types
@@ -34,6 +34,8 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [sensoryLoading, setSensoryLoading] = useState(false);
   const [polishLoading, setPolishLoading] = useState(false);
+  // Fixed: Added missing sensorySparks state definition
+  const [sensorySparks, setSensorySparks] = useState<{sight: string, sound: string, smell: string, touch: string, taste: string} | null>(null);
   const [provider, setProvider] = useState<AIProvider>('groq'); 
   const [showBrainstorm, setShowBrainstorm] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -43,8 +45,7 @@ const App: React.FC = () => {
   const [activeChapter, setActiveChapter] = useState(0);
   const [archive, setArchive] = useState<Novel[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [hasGeminiApiKey, setHasGeminiApiKey] = useState(true);
-  const [sensorySparks, setSensorySparks] = useState<any>(null);
+  const [showKeyModal, setShowKeyModal] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // --- STORY STATE ---
@@ -83,8 +84,12 @@ const App: React.FC = () => {
   // --- INITIALIZATION ---
   useEffect(() => {
     db.getAllNovels().then(setArchive).catch(console.error);
-    if ((window as any).aistudio) {
-      (window as any).aistudio.hasSelectedApiKey().then(setHasGeminiApiKey);
+    // Auto-detect missing keys on boot
+    const geminiKey = process.env.API_KEY;
+    const groqKey = process.env.GROQ_API_KEY;
+    if (!geminiKey || geminiKey.includes('placeholder') || geminiKey.includes('your_') ||
+        !groqKey || groqKey.includes('placeholder') || groqKey.includes('your_')) {
+      setShowKeyModal(true);
     }
   }, []);
 
@@ -97,14 +102,6 @@ const App: React.FC = () => {
   const filteredArchive = useMemo(() => {
     return archive.sort((a, b) => b.lastModified - a.lastModified);
   }, [archive]);
-
-  const handleOpenKeySelection = async () => {
-    if ((window as any).aistudio) {
-      await (window as any).aistudio.openSelectKey();
-      setHasGeminiApiKey(true);
-      setError(null);
-    }
-  };
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text).catch(err => {
@@ -119,8 +116,8 @@ const App: React.FC = () => {
       await task();
     } catch (e: any) {
       if (e.message === "ARCHITECT_AUTH_REQUIRED") {
-        setError("Gemini Key required. Click Resolve or switch to Cerebro.");
-        setHasGeminiApiKey(false);
+        setError("Invalid or Missing API Keys. Please configure your settings.");
+        setShowKeyModal(true);
       } else if (e.message === "ARCHITECT_QUOTA_EXHAUSTED") {
         setError("AI Quota exhausted (429). Please wait.");
       } else {
@@ -166,9 +163,10 @@ const App: React.FC = () => {
     setSensoryLoading(true);
     try {
       const sparks = await infuseSensoryDetail(content, novel, provider);
+      // Fixed: setSensorySparks is now correctly called
       setSensorySparks(sparks);
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      if (e.message === "ARCHITECT_AUTH_REQUIRED") setShowKeyModal(true);
       setError("Sensory infusion failed.");
     } finally {
       setSensoryLoading(false);
@@ -187,8 +185,8 @@ const App: React.FC = () => {
         setNovel(updatedNovel);
         await saveToArchive(updatedNovel);
       }
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      if (e.message === "ARCHITECT_AUTH_REQUIRED") setShowKeyModal(true);
       setError("Prose polish failed.");
     } finally {
       setPolishLoading(false);
@@ -226,23 +224,86 @@ const App: React.FC = () => {
     setChatHistory(p => [...p, { role: 'ai', text: res || "I'm sorry, I couldn't process that advice." }]);
   });
 
-  const showKeyError = !!error;
-
   return (
     <div className={`min-h-screen ${step === 'write' ? 'bg-white' : 'bg-[#fafafa]'} text-slate-900 font-sans flex flex-col transition-all ${isFocusMode ? 'overflow-hidden' : ''}`}>
+      
+      {/* API KEY MODAL */}
+      {showKeyModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowKeyModal(false)} />
+          <div className="relative bg-white w-full max-w-xl rounded-[3rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="bg-slate-900 p-8 text-white">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <Lock className="text-indigo-400" size={24}/>
+                  <h3 className="text-xl font-black uppercase tracking-tighter">API Configuration</h3>
+                </div>
+                <button onClick={() => setShowKeyModal(false)} className="opacity-50 hover:opacity-100 transition-opacity"><X/></button>
+              </div>
+              <p className="mt-4 text-slate-400 text-xs font-bold leading-relaxed uppercase tracking-widest">
+                To enable AI writing, you must add your private keys to your <code className="text-indigo-400">.env</code> file or deployment settings.
+              </p>
+            </div>
+            
+            <div className="p-8 space-y-8">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                   <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"/> Architect Engine (Gemini)</span>
+                   <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-[9px] font-black uppercase text-indigo-600 flex items-center gap-1 hover:underline">Get Free Key <ExternalLink size={10}/></a>
+                </div>
+                <div className="p-4 bg-slate-50 border rounded-2xl flex items-center justify-between gap-4">
+                  <div className="flex-1 overflow-hidden">
+                    <p className="text-[10px] font-mono truncate opacity-60">{process.env.API_KEY || 'MISSING'}</p>
+                  </div>
+                  {(process.env.API_KEY?.includes('placeholder') || !process.env.API_KEY) && (
+                    <span className="flex items-center gap-1.5 px-3 py-1 bg-rose-50 text-rose-500 rounded-full text-[8px] font-black uppercase"><AlertTriangle size={10}/> Invalid</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                   <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"/> Cerebro Engine (Groq)</span>
+                   <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" className="text-[9px] font-black uppercase text-rose-600 flex items-center gap-1 hover:underline">Get Free Key <ExternalLink size={10}/></a>
+                </div>
+                <div className="p-4 bg-slate-50 border rounded-2xl flex items-center justify-between gap-4">
+                  <div className="flex-1 overflow-hidden">
+                    <p className="text-[10px] font-mono truncate opacity-60">{process.env.GROQ_API_KEY || 'MISSING'}</p>
+                  </div>
+                  {(process.env.GROQ_API_KEY?.includes('placeholder') || !process.env.GROQ_API_KEY) && (
+                    <span className="flex items-center gap-1.5 px-3 py-1 bg-rose-50 text-rose-500 rounded-full text-[8px] font-black uppercase"><AlertTriangle size={10}/> Invalid</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-6 bg-indigo-50 rounded-3xl border border-indigo-100">
+                <h4 className="text-[10px] font-black text-indigo-600 uppercase mb-2">Instructions:</h4>
+                <ol className="text-[10px] text-slate-600 font-bold space-y-2 list-decimal ml-4">
+                  <li>Visit the links above and create your API keys.</li>
+                  <li>In your local folder, open <code className="bg-white px-1 py-0.5 rounded">.env</code>.</li>
+                  <li>Paste your keys into the file and save it.</li>
+                  <li><b>Sync your changes to GitHub.</b></li>
+                  <li><b>Important:</b> On your hosting provider (Vercel/Netlify), add these keys to "Environment Variables".</li>
+                </ol>
+              </div>
+
+              <button onClick={() => setShowKeyModal(false)} className="w-full bg-slate-900 text-white py-5 rounded-3xl font-black uppercase text-xs hover:bg-indigo-600 transition-all">I have updated the keys</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ERROR BAR */}
-      {showKeyError && (
+      {error && !showKeyModal && (
         <div className="bg-rose-500 text-white px-8 py-3 flex justify-between items-center sticky top-0 z-[100] shadow-xl animate-in slide-in-from-top duration-300">
           <div className="flex items-center gap-3">
             <AlertTriangle size={18} />
             <span className="text-[10px] font-black uppercase tracking-widest">{error}</span>
           </div>
           <div className="flex items-center gap-4">
-            {(provider === 'gemini' || error?.includes("Gemini")) && !hasGeminiApiKey && (
-              <button onClick={handleOpenKeySelection} className="flex items-center gap-2 px-4 py-1.5 bg-white text-rose-500 rounded-lg text-[9px] font-black uppercase hover:bg-rose-50 transition-all">
-                <Key size={12}/> Resolve Key
-              </button>
-            )}
+            <button onClick={() => setShowKeyModal(true)} className="flex items-center gap-2 px-4 py-1.5 bg-white text-rose-500 rounded-lg text-[9px] font-black uppercase hover:bg-rose-50 transition-all">
+              <Key size={12}/> Resolve Key
+            </button>
             <button onClick={() => setError(null)} className="opacity-50 hover:opacity-100"><X size={18}/></button>
           </div>
         </div>
