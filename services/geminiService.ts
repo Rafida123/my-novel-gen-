@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import Groq from "groq-sdk";
 
@@ -9,7 +10,12 @@ export type AIProvider = 'gemini' | 'groq';
 const wrapApiError = (error: any) => {
   const message = error?.message || String(error);
   // Specifically detect the key/auth error to trigger the "Resolve Key" UI
-  if (message.includes("401") || message.toLowerCase().includes("invalid_api_key") || message.includes("Requested entity was not found")) {
+  if (
+    message.includes("401") || 
+    message.toLowerCase().includes("invalid_api_key") || 
+    message.includes("Requested entity was not found") ||
+    message.includes("API key not valid")
+  ) {
     return new Error("ARCHITECT_AUTH_REQUIRED");
   }
   if (message.includes("429") || message.toLowerCase().includes("quota exceeded")) {
@@ -19,18 +25,19 @@ const wrapApiError = (error: any) => {
 };
 
 const getGeminiClient = () => {
-  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = process.env.API_KEY;
+  // If the key is missing or still the placeholder, treat it as an auth requirement
+  if (!apiKey || apiKey === 'your_gemini_api_key_here') {
+    throw new Error("ARCHITECT_AUTH_REQUIRED");
+  }
+  return new GoogleGenAI({ apiKey });
 };
 
 const getGroqClient = () => {
-  // Relying solely on environment variables to prevent security-based sync blocks from GitHub.
-  // Make sure to add GROQ_API_KEY to your .env file or deployment settings.
   const apiKey = process.env.GROQ_API_KEY;
-  
-  if (!apiKey) {
-    console.error("CRITICAL: GROQ_API_KEY is missing from environment.");
+  if (!apiKey || apiKey === 'your_groq_api_key_here') {
+    console.warn("GROQ_API_KEY is missing or using placeholder.");
   }
-
   return new Groq({ 
     apiKey: apiKey || "", 
     dangerouslyAllowBrowser: true 
@@ -246,7 +253,7 @@ export const getAiSuggestions = async (chapterContent: string, nextTitle: string
       const parsed = JSON.parse(response.choices[0].message.content || "{}");
       return Array.isArray(parsed.suggestions) ? parsed.suggestions : (Array.isArray(parsed) ? parsed : Object.values(parsed)[0] as string[]);
     } else {
-      const ai = getGeminiClient();
+      const ai = await getGeminiClient();
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: prompt,
