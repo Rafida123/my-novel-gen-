@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   BookOpen, Sparkles, Wand2, Loader2, Library, Save, Users, Palette, 
   Flame, Cpu, ExternalLink, X, UserPlus, User as UserIcon, 
-  Send, Wind, Trash2, PlusCircle, Search, Zap, ImageIcon, Key, AlertTriangle
+  Send, Wind, Trash2, PlusCircle, Search, Zap, ImageIcon, Key, AlertTriangle, Settings
 } from 'lucide-react';
 
 import { Novel, AppStep } from './types.ts';
@@ -20,6 +20,15 @@ const App: React.FC = () => {
   const [chatInput, setChatInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [hasSelectedKey, setHasSelectedKey] = useState(true);
+  const [aiProvider, setAiProvider] = useState<ai.AIProviderType>(ai.getProviderType());
+
+  // Check if provider has a valid key
+  const isProviderReady = () => {
+    const key = ai.getApiKeyForProvider(aiProvider);
+    return key && key.length > 10;
+  };
+
+  const [providerReady, setProviderReady] = useState(true);
 
   const [novel, setNovel] = useState<any>({
     id: crypto.randomUUID(),
@@ -41,7 +50,8 @@ const App: React.FC = () => {
   useEffect(() => { 
     loadNovels();
     checkKeySelection();
-  }, []);
+    setProviderReady(isProviderReady());
+  }, [aiProvider]);
 
   const loadNovels = async () => {
     try {
@@ -62,13 +72,31 @@ const App: React.FC = () => {
   };
 
   const handleOpenKeySelection = async () => {
+    if (aiProvider === 'groq') {
+      const key = prompt("Paste your Groq API Key (starts with gsk_):");
+      if (key && key.trim().length > 10) {
+        localStorage.setItem('GROQ_API_KEY', key.trim());
+        setProviderReady(true);
+        setError(null);
+      }
+      return;
+    }
+
     // @ts-ignore
     if (window.aistudio && typeof window.aistudio.openSelectKey === 'function') {
       // @ts-ignore
       await window.aistudio.openSelectKey();
+      // Assume success after modal open to avoid race condition
       setHasSelectedKey(true);
+      setProviderReady(true);
       setError(null);
     }
+  };
+
+  const handleProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const provider = e.target.value as ai.AIProviderType;
+    ai.setProvider(provider);
+    setAiProvider(provider);
   };
 
   const save = async (updated: any) => {
@@ -87,9 +115,9 @@ const App: React.FC = () => {
     } catch (e: any) {
       console.error(e);
       const errMsg = e.message || String(e);
-      if (errMsg.includes("Requested entity was not found") || errMsg.includes("401") || errMsg.includes("API_KEY_INVALID")) {
-        setError("Invalid or missing Gemini API Key. Please select a valid key.");
-        setHasSelectedKey(false);
+      if (errMsg.includes("MISSING") || errMsg.includes("401") || errMsg.includes("invalid_api_key") || errMsg.includes("Unauthorized")) {
+        setError(`${aiProvider.toUpperCase()} credentials required. Tap 'Setup Key' in the header.`);
+        setProviderReady(false);
       } else {
         setError(errMsg);
       }
@@ -136,9 +164,10 @@ const App: React.FC = () => {
       setChatHistory(prev => [...prev, { role: 'ai', text: res.text, links: res.links }]);
     } catch (e: any) { 
       setChatHistory(prev => [...prev, { role: 'ai', text: `Consultation error: ${e.message}` }]);
-      if (e.message.includes("401") || e.message.includes("not found")) setHasSelectedKey(false);
     }
   };
+
+  const showSetupButton = !providerReady || (aiProvider === 'gemini' && !hasSelectedKey);
 
   return (
     <div className="min-h-screen bg-[#fafafa] flex flex-col font-sans text-slate-900 overflow-hidden">
@@ -148,10 +177,23 @@ const App: React.FC = () => {
           <div className="bg-indigo-600 p-2 rounded-xl text-white shadow-lg"><BookOpen size={20}/></div>
           <h1 className="font-black text-xs uppercase tracking-widest">Architect <span className="text-indigo-600">Studio</span></h1>
         </div>
-        <div className="flex gap-3">
-          {!hasSelectedKey && (
-            <button onClick={handleOpenKeySelection} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 text-amber-600 border border-amber-100 text-[10px] font-black uppercase tracking-widest hover:bg-amber-100 transition-all">
-              <Key size={16}/> Setup Key
+        
+        <div className="flex gap-4 items-center">
+          <div className="flex items-center gap-2 bg-slate-50 border rounded-xl px-3 py-1.5 shadow-sm">
+            <Settings size={14} className="text-slate-400" />
+            <select 
+              value={aiProvider} 
+              onChange={handleProviderChange}
+              className="bg-transparent text-[10px] font-black uppercase tracking-widest outline-none cursor-pointer text-slate-600"
+            >
+              <option value="gemini">Gemini 2.5/3</option>
+              <option value="groq">Groq (Llama 3.3)</option>
+            </select>
+          </div>
+
+          {showSetupButton && (
+            <button onClick={handleOpenKeySelection} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 text-amber-600 border border-amber-100 text-[10px] font-black uppercase tracking-widest hover:bg-amber-100 transition-all shadow-sm">
+              <Key size={14}/> Setup {aiProvider.toUpperCase()} Key
             </button>
           )}
           {step !== 'archive' && (
@@ -168,7 +210,6 @@ const App: React.FC = () => {
       {error && (
         <div className="bg-red-500 text-white px-6 py-2 flex justify-between items-center text-[10px] font-black uppercase tracking-widest z-[60]">
           <div className="flex items-center gap-2">
-            {/* Fix: Added missing AlertTriangle icon import from lucide-react */}
             <AlertTriangle size={14}/>
             <span>{error}</span>
           </div>
@@ -177,7 +218,6 @@ const App: React.FC = () => {
       )}
 
       <div className="flex flex-1 overflow-hidden relative">
-        {/* Nav */}
         <aside className="w-20 lg:w-64 border-r bg-white flex flex-col p-4 space-y-2 z-40">
           {[
             { id: 'archive', icon: Library, label: 'Manuscripts' },
@@ -200,7 +240,6 @@ const App: React.FC = () => {
           </div>
         </aside>
 
-        {/* Workspace */}
         <main className="flex-1 overflow-y-auto p-10 bg-slate-50/20 custom-scrollbar">
           <div className="max-w-5xl mx-auto w-full">
             {step === 'archive' && (
@@ -242,7 +281,7 @@ const App: React.FC = () => {
                     <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">The Core Spark (Premise)</label>
                     <textarea value={novel.premise} onChange={e => setNovel({...novel, premise: e.target.value})} className="w-full h-48 bg-slate-50 p-8 rounded-[2.5rem] outline-none text-lg resize-none shadow-inner focus:bg-white transition-all" placeholder="Describe the heart of the story..." />
                   </div>
-                  <button onClick={handleGenerateOutline} disabled={loading} className="w-full bg-slate-900 text-white py-6 rounded-3xl font-black uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-xl disabled:opacity-50 flex items-center justify-center gap-3">
+                  <button onClick={handleGenerateOutline} disabled={loading || !providerReady} className="w-full bg-slate-900 text-white py-6 rounded-3xl font-black uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-xl disabled:opacity-50 flex items-center justify-center gap-3">
                     <Cpu size={20}/> {loading ? 'Architecting...' : 'Construct Outline'}
                   </button>
                 </div>
@@ -281,7 +320,7 @@ const App: React.FC = () => {
                       <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center font-black text-xs shadow-md">{activeChapter + 1}</div>
                       <h3 className="font-black text-lg truncate max-w-xs">{novel.outline[activeChapter] || "Prologue"}</h3>
                     </div>
-                    <button onClick={() => handleDraft(activeChapter)} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl text-[10px] font-black uppercase hover:bg-indigo-700 shadow-lg flex items-center gap-2 transition-all"><Zap size={14}/> AI Draft</button>
+                    <button onClick={() => handleDraft(activeChapter)} disabled={!providerReady} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl text-[10px] font-black uppercase hover:bg-indigo-700 shadow-lg flex items-center gap-2 transition-all disabled:opacity-50"><Zap size={14}/> AI Draft</button>
                   </div>
                   <textarea value={novel.chapters[activeChapter] || ""} onChange={e => setNovel({...novel, chapters: {...novel.chapters, [activeChapter]: e.target.value}})} className="flex-1 p-12 text-xl leading-relaxed outline-none font-serif font-medium resize-none selection:bg-indigo-100 custom-scrollbar" placeholder="The prose begins here..." />
                   <div className="p-8 border-t bg-slate-50/50 flex justify-between gap-4">
@@ -296,7 +335,7 @@ const App: React.FC = () => {
               <div className="space-y-8 animate-in zoom-in-95">
                 <div className="flex justify-between items-end">
                   <h2 className="text-3xl font-black">Moodboard</h2>
-                  <button onClick={handleMoodboard} className="bg-indigo-600 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase shadow-lg hover:bg-indigo-700 transition">Visualize Scene</button>
+                  <button onClick={handleMoodboard} disabled={!providerReady} className="bg-indigo-600 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase shadow-lg hover:bg-indigo-700 transition disabled:opacity-50">Visualize Scene</button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {novel.storyboard?.map((s: any) => (
@@ -312,7 +351,6 @@ const App: React.FC = () => {
           </div>
         </main>
 
-        {/* Consultant Sidebar */}
         {showConsultant && (
           <aside className="fixed inset-y-0 right-0 w-full sm:w-96 bg-white border-l shadow-2xl z-[60] flex flex-col animate-in slide-in-from-right duration-500">
             <div className="p-6 border-b bg-slate-900 text-white flex justify-between items-center">
@@ -326,7 +364,7 @@ const App: React.FC = () => {
               {chatHistory.length === 0 && (
                 <div className="py-10 text-center space-y-4 px-6">
                    <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center mx-auto shadow-sm text-indigo-600"><Wind size={24}/></div>
-                   <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Ask for plot advice or research. Powered by Google Search.</p>
+                   <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Ask for plot advice or research. Powered by Google Search (on Gemini).</p>
                 </div>
               )}
               {chatHistory.map((m, i) => (
@@ -348,8 +386,8 @@ const App: React.FC = () => {
               ))}
             </div>
             <div className="p-6 border-t bg-white flex gap-2">
-              <input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleConsult()} className="flex-1 bg-slate-50 p-4 rounded-2xl outline-none text-xs border border-transparent focus:border-indigo-100 transition-all" placeholder="Ask plotting advice..." />
-              <button onClick={handleConsult} className="p-4 bg-slate-900 text-white rounded-2xl hover:bg-indigo-600 transition-all shadow-lg"><Send size={18}/></button>
+              <input value={chatInput} disabled={!providerReady} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleConsult()} className="flex-1 bg-slate-50 p-4 rounded-2xl outline-none text-xs border border-transparent focus:border-indigo-100 transition-all" placeholder="Ask plotting advice..." />
+              <button onClick={handleConsult} disabled={!providerReady || !chatInput.trim()} className="p-4 bg-slate-900 text-white rounded-2xl hover:bg-indigo-600 transition-all shadow-lg disabled:opacity-50"><Send size={18}/></button>
             </div>
           </aside>
         )}
