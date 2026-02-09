@@ -6,7 +6,7 @@ export interface Character {
   dialogueStyles: string[];
   personality: string[];
   expressions: string[];
-  kinks: string[];
+  dynamics: { type: string; context: string }[];
   hairColor: string;
   eyeColor: string;
   bodyType: string;

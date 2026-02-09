@@ -82,6 +82,7 @@ class GeminiAdapter implements AIProvider {
 Title: ${novel.title}
 Genre: ${novel.genre}
 Context: ${novel.premise}
+Tags: ${novel.tags?.join(', ') || 'None'}
 ${novel.isR18 ? "R18 Protocol: Explicit themes allowed." : "Standard Protocol."}
 JSON Output: { "premise": "blurb text", "outline": ["Chapter 1: ..."] }`;
     const response = await ai.models.generateContent({
@@ -103,14 +104,24 @@ JSON Output: { "premise": "blurb text", "outline": ["Chapter 1: ..."] }`;
   }
   async generateDraftChapter(index: number, novel: any, directive: string, memory: any) {
     const ai = this.getClient();
-    const chars = novel.characters.map((c: any) => `- ${c.name}: ${c.description}. Personality: ${c.personality?.join(', ')}.`).join("\n");
+    const chars = novel.characters.map((c: any) => `- ${c.name} (${c.role}): ${c.description}. Personality: ${c.personality?.join(', ')}.`).join("\n");
     const storyMemory = memory ? `Continuity Points (Previous Events): ${JSON.stringify(memory)}` : "";
+    
+    const sensoryR18 = novel.isR18 ? `
+      INTIMACY PROTOCOL: If the scene is intimate, physical, or sexual, make the writing highly sensory. 
+      Insert varied and realistic sound effects in italics naturally at key moments (mouth actions, kisses, wet contact, body movement, bed shifting): 
+      *plop*, *slrk*, *mmph*, *wet pop*, *kiss*, *lick*, *pant*, *gasp*, *thump*, *creak*, *rustle*.
+      Do not repeat the same sound effect too often. Focus on the visceral and auditory experience.
+    ` : "";
+
     const prompt = `Write Chapter ${index + 1}: ${novel.outline[index]} for "${novel.title}".
+Genre: ${novel.genre}
+Tags: ${novel.tags?.join(', ') || 'None'}
 Characters:
 ${chars}
 ${storyMemory}
-Style: ${novel.novelStyle}
-Genre: ${novel.genre}
+Style: ${novel.novelStyle || 'Immersive, professional fiction'}
+${sensoryR18}
 Directive: ${directive}
 Return ONLY the chapter text.`;
     const response = await ai.models.generateContent({ 
@@ -193,13 +204,21 @@ Return JSON: { "premise": "blurb", "outline": ["Chapter 1: ...", "Chapter 2: ...
     return JSON.parse(cleanJson(res));
   }
   async generateDraftChapter(index: number, novel: any, directive: string, memory: any) {
-    const chars = novel.characters.map((c: any) => `- ${c.name}: ${c.description}. personality: ${c.personality?.join(', ')}`).join("\n");
+    const chars = novel.characters.map((c: any) => `- ${c.name} (${c.role}): ${c.description}. personality: ${c.personality?.join(', ')}`).join("\n");
     const storyMemory = memory ? `Previous Events: ${JSON.stringify(memory)}` : "";
     const chapterTitle = novel.outline[index] || "Untitled Chapter";
+    
+    const sensoryR18 = novel.isR18 ? `
+      INTIMACY PROTOCOL: If writing a physical or intimate scene, use highly sensory language.
+      Insert realistic sound effects in italics naturally: *plop*, *slrk*, *mmph*, *wet pop*, *kiss*, *lick*, *pant*, *gasp*, *thump*, *creak*, *rustle*.
+      Incorporate them variedly during body contact, kisses, and movement. Evocative and visceral.
+    ` : "";
+
     const prompt = `Write Chapter ${index + 1}: ${chapterTitle} for "${novel.title}".
 Characters:
 ${chars}
 ${storyMemory}
+${sensoryR18}
 Directive: ${directive}
 Return ONLY the chapter text.`;
     return await this.callGroq(prompt);
