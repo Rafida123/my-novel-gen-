@@ -527,12 +527,12 @@ const App: React.FC = () => {
             {step === 'write' && (
               <div className="flex flex-col gap-4 h-[85vh]">
                 <div className="flex-1 bg-white rounded-2xl border shadow-sm flex flex-col overflow-hidden relative">
-                  <div className="p-4 border-b bg-slate-50/30 flex justify-between items-center shadow-sm">
+                  <div className="p-4 border-b bg-white flex justify-between items-center shadow-sm">
                     <div className="flex items-center gap-3"><div className="w-7 h-7 bg-indigo-600 text-white rounded-lg flex items-center justify-center font-black text-[10px] shadow-md">{activeChapter + 1}</div><h3 className="font-black text-[10px] truncate max-w-xs uppercase tracking-wider">{novel.outline[activeChapter] || "Untitled Beat"}</h3></div>
                     <button onClick={() => handleDraft(activeChapter)} disabled={loading} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-[9px] font-black uppercase flex items-center gap-2 transition-all hover:bg-indigo-700 shadow-md"><Zap size={14}/> {loading ? 'Drafting...' : 'Draft Prose'}</button>
                   </div>
-                  <textarea value={novel.chapters[activeChapter] || ""} onChange={e => setNovel({...novel, chapters: {...novel.chapters, [activeChapter]: e.target.value}})} className="flex-1 p-8 text-[13px] leading-relaxed outline-none font-serif resize-none custom-scrollbar" placeholder="LET THE NARRATIVE BEGIN..."/>
-                  <div className="p-3 border-t bg-slate-50/30 flex justify-between shadow-inner">
+                  <textarea value={novel.chapters[activeChapter] || ""} onChange={e => setNovel({...novel, chapters: {...novel.chapters, [activeChapter]: e.target.value}})} className="flex-1 p-8 text-[13px] leading-relaxed outline-none font-serif resize-none custom-scrollbar bg-white" placeholder="LET THE NARRATIVE BEGIN..."/>
+                  <div className="p-3 border-t bg-white flex justify-between shadow-inner">
                     <button onClick={() => setActiveChapter(Math.max(0, activeChapter - 1))} disabled={activeChapter === 0} className="px-4 py-2 bg-white border rounded-xl text-[9px] font-black uppercase disabled:opacity-30 hover:bg-slate-50 transition-colors">Previous Chapter</button>
                     <button onClick={() => setActiveChapter(Math.min(novel.outline.length-1, activeChapter + 1))} disabled={activeChapter >= novel.outline.length-1} className="px-4 py-2 bg-slate-900 text-white rounded-xl text-[9px] font-black uppercase disabled:opacity-30 hover:bg-slate-800 transition-colors">Next Chapter</button>
                   </div>
