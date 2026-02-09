@@ -73,8 +73,6 @@ const App: React.FC = () => {
   const [openFeatureGroups, setOpenFeatureGroups] = useState<Record<number, string | null>>({});
   const [providerReady, setProviderReady] = useState(true);
   const [showLibrary, setShowLibrary] = useState<{charIdx: number, type: 'archetype' | 'feature', field?: string} | null>(null);
-  
-  // New state for collapsible tag categories
   const [expandedTagCategories, setExpandedTagCategories] = useState<Set<string>>(new Set(['Genre / Story Type']));
 
   const isProviderReady = () => {
@@ -108,7 +106,7 @@ const App: React.FC = () => {
 
   const handleOpenKeySelection = async () => {
     if (aiProvider === 'groq') {
-      const key = prompt("Paste your Groq API Key (starts with gsk_):");
+      const key = prompt("Paste your Groq API Key (starts with gsk_ or check your VITE_GROQ_API_KEY):");
       if (key && key.trim().length > 10) {
         localStorage.setItem('GROQ_API_KEY', key.trim());
         setProviderReady(true);

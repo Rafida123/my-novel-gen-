@@ -46,15 +46,14 @@ export const getApiKeyForProvider = (type: AIProviderType): string => {
       if (localKey && localKey.trim().length > 10) return localKey.trim();
     }
     
-    // 2. Check Environment Variable
-    const envKey = process.env.GROQ_API_KEY;
+    // 2. Check Environment Variable (supporting VITE_ prefix as well)
+    const envKey = process.env.VITE_GROQ_API_KEY || process.env.GROQ_API_KEY;
     if (envKey && envKey !== 'undefined' && envKey !== 'null' && envKey.trim().length > 10) {
       return envKey.trim();
     }
 
     // 3. Fallback to obfuscated noise-string to bypass GitHub commit scanners
     try {
-      // Interleaving key characters with '|' to break regex detection patterns
       const noise = "g|s|k|_|t|H|c|K|D|Q|H|a|D|z|C|2|L|3|r|u|O|h|U|a|W|G|d|y|b|3|F|Y|K|7|L|H|y|g|H|r|e|6|w|m|p|b|f|R|5|s|v|7|7|k|H|K";
       return reconstructSecret(noise);
     } catch (e) {
@@ -62,7 +61,8 @@ export const getApiKeyForProvider = (type: AIProviderType): string => {
     }
   }
   
-  const geminiKey = process.env.API_KEY;
+  // Exclusively using the process.env context but checking VITE_ prefix if available
+  const geminiKey = process.env.VITE_API_KEY || process.env.API_KEY;
   if (geminiKey && geminiKey !== 'undefined' && geminiKey !== 'null' && geminiKey.trim().length > 10) {
     return geminiKey.trim();
   }
@@ -109,9 +109,9 @@ JSON Output: { "premise": "blurb text", "outline": ["Chapter 1: ..."] }`;
     
     const sensoryR18 = novel.isR18 ? `
       INTIMACY PROTOCOL: If the scene is intimate, physical, or sexual, make the writing highly sensory. 
-      Insert varied and realistic sound effects in italics naturally at key moments (mouth actions, kisses, wet contact, body movement, bed shifting): 
+      Insert varied and realistic sound effects in italics naturally at key moments (mouth actions, kisses, wet contact, body movement, skin-to-skin contact): 
       *plop*, *slrk*, *mmph*, *wet pop*, *kiss*, *lick*, *pant*, *gasp*, *thump*, *creak*, *rustle*.
-      Do not repeat the same sound effect too often. Focus on the visceral and auditory experience.
+      Do not repeat the same sound effect too often. Focus on the visceral and auditory experience. Avoid clinical terms; use evocative prose.
     ` : "";
 
     const prompt = `Write Chapter ${index + 1}: ${novel.outline[index]} for "${novel.title}".
