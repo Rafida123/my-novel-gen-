@@ -51,21 +51,19 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [hasSelectedKey, setHasSelectedKey] = useState(true);
   const [aiProvider, setAiProvider] = useState<ai.AIProviderType>(ai.getProviderType());
-  const [expandedCharacters, setExpandedCharacters] = useState<Set<number>>(new Set());
+  const [expandedCharacters, setExpandedCharacters] = useState<Set<number>>(new Set([0]));
   const [providerReady, setProviderReady] = useState(true);
 
-  // Check if current provider has a usable key
-  const checkProviderReadiness = () => {
+  // Check if provider has a valid key
+  const isProviderReady = () => {
     const key = ai.getApiKeyForProvider(aiProvider);
-    const isReady = !!(key && key.trim().length > 10);
-    setProviderReady(isReady);
-    return isReady;
+    return !!(key && key.length > 10);
   };
 
   useEffect(() => { 
     loadNovels();
     checkKeySelection();
-    checkProviderReadiness();
+    setProviderReady(isProviderReady());
   }, [aiProvider]);
 
   const loadNovels = async () => {
@@ -111,6 +109,7 @@ const App: React.FC = () => {
     const provider = e.target.value as ai.AIProviderType;
     ai.setProvider(provider);
     setAiProvider(provider);
+    setProviderReady(ai.getApiKeyForProvider(provider).length > 10);
   };
 
   const save = async (updated: any) => {
@@ -120,6 +119,51 @@ const App: React.FC = () => {
     loadNovels();
   };
 
+  const toggleTrait = (charIdx: number, trait: string) => {
+    const newChars = [...novel.characters];
+    const currentTraits = newChars[charIdx].personality || [];
+    newChars[charIdx] = {
+      ...newChars[charIdx],
+      personality: currentTraits.includes(trait) 
+        ? currentTraits.filter((t: string) => t !== trait) 
+        : [...currentTraits, trait]
+    };
+    setNovel({ ...novel, characters: newChars });
+  };
+
+  const toggleDialogueStyle = (charIdx: number, style: string) => {
+    const newChars = [...novel.characters];
+    const currentStyles = newChars[charIdx].dialogueStyles || [];
+    newChars[charIdx] = {
+      ...newChars[charIdx],
+      dialogueStyles: currentStyles.includes(style) 
+        ? currentStyles.filter((s: string) => s !== style) 
+        : [...currentStyles, style]
+    };
+    setNovel({ ...novel, characters: newChars });
+  };
+
+  const toggleIdeationTag = (field: 'subGenres' | 'tone' | 'kinks' | 'contentTags', tag: string) => {
+    const current = novel[field] || [];
+    const updated = current.includes(tag) 
+      ? current.filter((t: string) => t !== tag) 
+      : [...current, tag];
+    setNovel({ ...novel, [field]: updated });
+  };
+
+  const updateCharacterField = (idx: number, field: string, value: string) => {
+    const nc = [...novel.characters];
+    nc[idx] = { ...nc[idx], [field]: value };
+    setNovel({...novel, characters: nc});
+  };
+
+  const toggleExpand = (idx: number) => {
+    const next = new Set(expandedCharacters);
+    if (next.has(idx)) next.delete(idx);
+    else next.add(idx);
+    setExpandedCharacters(next);
+  };
+
   const wrapAiCall = async (task: () => Promise<void>, msg: string) => {
     setError(null);
     setLoadingMessage(msg);
@@ -127,36 +171,47 @@ const App: React.FC = () => {
     try {
       await task();
     } catch (e: any) {
-      console.error("AI Execution Error:", e);
+      console.error("AI Error:", e);
       const errMsg = e.message || String(e);
       if (errMsg.includes("MISSING") || errMsg.includes("401") || errMsg.includes("INVALID_GROQ_KEY") || errMsg.includes("Unauthorized")) {
-        setError(`${aiProvider.toUpperCase()} setup required. Check the top header.`);
+        setError(`${aiProvider.toUpperCase()} setup required. Tap 'Setup Key' in the header.`);
         setProviderReady(false);
       } else {
-        setError(`Architect failure: ${errMsg}`);
+        setError(errMsg);
       }
     } finally {
       setLoading(false);
     }
   };
 
-  const handleGenerateOutline = () => wrapAiCall(async () => {
-    if (!novel.premise.trim()) throw new Error("Please enter a premise in the Lab first.");
-    const res = await ai.generateOutline(novel);
-    await save({ ...novel, generatedPremise: res.premise, outline: res.outline });
-    setActiveChapter(0);
-  }, "Architecting Full Structure...");
+  const handleGenerateOutline = () => {
+    // Check if key is missing first
+    if (!isProviderReady()) {
+      handleOpenKeySelection();
+      return;
+    }
+
+    if (!novel.premise || novel.premise.trim().length < 10) {
+      setError("Please enter a more detailed premise in the Lab first (at least 10 chars).");
+      setStep('ideate');
+      return;
+    }
+    wrapAiCall(async () => {
+      const res = await ai.generateOutline(novel);
+      await save({ ...novel, generatedPremise: res.premise, outline: res.outline });
+    }, "Architecting Full Structure...");
+  };
 
   const handleDraft = (idx: number) => {
-    // Click behavior for non-ready states
-    if (!providerReady) {
+    // Check if key is missing first
+    if (!isProviderReady()) {
       handleOpenKeySelection();
       return;
     }
 
     if (!novel.outline || novel.outline.length === 0) {
+      setError("Please generate a story outline in the Ideation Lab first.");
       setStep('ideate');
-      setError("Please generate a story outline in Ideation before drafting.");
       return;
     }
 
@@ -166,12 +221,12 @@ const App: React.FC = () => {
         try {
           memory = await ai.generateStoryMemory(novel.chapters[idx - 1]);
         } catch (e) {
-          console.warn("Continuity check skipped due to processing error", e);
+          console.warn("Continuity check failed", e);
         }
       }
       const draft = await ai.generateDraftChapter(idx, novel, "", memory);
       await save({ ...novel, chapters: { ...novel.chapters, [idx]: draft } });
-    }, "Drafting Cinematic Scene...");
+    }, "Drafting Scene...");
   };
 
   const handlePortrait = (idx: number) => wrapAiCall(async () => {
@@ -184,12 +239,12 @@ const App: React.FC = () => {
   }, "Visualizing Character...");
 
   const handleMoodboard = () => wrapAiCall(async () => {
-    const p = `Cinematic environment art: ${novel.outline[activeChapter] || novel.title}. Style: ${novel.genre}. Atmosphere: 4k.`;
+    const p = `Art: ${novel.outline[activeChapter] || novel.title}. Genre: ${novel.genre}.`;
     const url = await ai.generateVisual(p);
     if (url) {
       await save({ ...novel, storyboard: [{ id: crypto.randomUUID(), url, prompt: p }, ...(novel.storyboard || [])] });
     }
-  }, "Rendering Environment Art...");
+  }, "Rendering Art...");
 
   const handleConsult = async () => {
     if (!chatInput.trim()) return;
@@ -198,31 +253,10 @@ const App: React.FC = () => {
     setChatHistory(prev => [...prev, { role: 'user', text: msg }]);
     try {
       const res = await ai.consultArchitect(msg, novel.generatedPremise || novel.premise);
-      setChatHistory(prev => [...prev, { role: 'ai', text: res.text }]);
+      setChatHistory(prev => [...prev, { role: 'ai', text: res.text, links: res.links }]);
     } catch (e: any) { 
       setChatHistory(prev => [...prev, { role: 'ai', text: `Consultation error: ${e.message}` }]);
     }
-  };
-
-  const toggleIdeationTag = (field: string, tag: string) => {
-    const current = (novel as any)[field] || [];
-    const updated = current.includes(tag) 
-      ? current.filter((t: string) => t !== tag) 
-      : [...current, tag];
-    setNovel({ ...novel, [field]: updated });
-  };
-
-  const toggleExpand = (idx: number) => {
-    const next = new Set(expandedCharacters);
-    if (next.has(idx)) next.delete(idx);
-    else next.add(idx);
-    setExpandedCharacters(next);
-  };
-
-  const updateCharacterField = (idx: number, field: string, value: any) => {
-    const nc = [...novel.characters];
-    nc[idx] = { ...nc[idx], [field]: value };
-    setNovel({ ...novel, characters: nc });
   };
 
   const createDefaultCharacter = () => ({
@@ -257,11 +291,10 @@ const App: React.FC = () => {
     storyboard: []
   });
 
-  const showHeaderSetupButton = !providerReady || (aiProvider === 'gemini' && !hasSelectedKey);
+  const configured = isProviderReady() && (aiProvider !== 'gemini' || hasSelectedKey);
 
   return (
     <div className="min-h-screen bg-[#fafafa] flex flex-col font-sans text-slate-900 overflow-hidden">
-      {/* Header */}
       <header className="h-16 border-b bg-white flex items-center justify-between px-6 z-50">
         <div className="flex items-center gap-3">
           <div className="bg-indigo-600 p-2 rounded-xl text-white shadow-lg"><BookOpen size={20}/></div>
@@ -276,14 +309,14 @@ const App: React.FC = () => {
               onChange={handleProviderChange}
               className="bg-transparent text-[10px] font-black uppercase tracking-widest outline-none cursor-pointer text-slate-600"
             >
-              <option value="gemini">Gemini 2.5/3</option>
-              <option value="groq">Groq (Llama 3.3)</option>
+              <option value="gemini">Gemini (Studio)</option>
+              <option value="groq">Groq (SDK)</option>
             </select>
           </div>
 
-          {showHeaderSetupButton && (
+          {!configured && (
             <button onClick={handleOpenKeySelection} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 text-amber-600 border border-amber-100 text-[10px] font-black uppercase tracking-widest hover:bg-amber-100 transition-all shadow-sm">
-              <Key size={14}/> Setup {aiProvider.toUpperCase()} Key
+              <Key size={14}/> Setup {aiProvider.toUpperCase()}
             </button>
           )}
           {step !== 'archive' && (
@@ -310,11 +343,11 @@ const App: React.FC = () => {
       <div className="flex flex-1 overflow-hidden relative">
         <aside className="w-20 lg:w-64 border-r bg-white flex flex-col p-4 space-y-2 z-40">
           {[
-            { id: 'archive', icon: Library, label: 'Manuscripts' },
+            { id: 'archive', icon: Library, label: 'Archive' },
             { id: 'ideate', icon: Sparkles, label: 'Ideation' },
-            { id: 'style', icon: Users, label: 'Casting' },
-            { id: 'write', icon: Wand2, label: 'Studio' },
-            { id: 'storyboard', icon: ImageIcon, label: 'Moodboard' }
+            { id: 'style', icon: Users, label: 'Characters' },
+            { id: 'write', icon: Wand2, label: 'Manuscript' },
+            { id: 'storyboard', icon: ImageIcon, label: 'Storyboard' }
           ].map(s => (
             <button 
               key={s.id} 
@@ -339,7 +372,7 @@ const App: React.FC = () => {
             {step === 'archive' && (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in duration-500">
                 <div onClick={() => { setNovel({ id: crypto.randomUUID(), title: 'Untethered Story', characters: [createDefaultCharacter()], outline: [], chapters: {}, storyboard: [], subGenres: [], tone: [], kinks: [], contentTags: [] }); setStep('ideate'); }} className="h-64 border-2 border-dashed border-slate-200 rounded-[2.5rem] flex flex-col items-center justify-center gap-4 cursor-pointer hover:border-indigo-400 transition-all group">
-                  <PlusCircle className="text-slate-200 group-hover:text-indigo-600" size={48}/><span className="text-[10px] font-black uppercase text-slate-300">New Manuscript</span>
+                  <PlusCircle className="text-slate-200 group-hover:text-indigo-600" size={48}/><span className="text-[10px] font-black uppercase text-slate-300">New Story</span>
                 </div>
                 {archive.map(item => (
                   <div key={item.id} onClick={() => { setNovel(item); setStep('write'); }} className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-2xl transition-all cursor-pointer group h-64 flex flex-col relative">
@@ -348,7 +381,7 @@ const App: React.FC = () => {
                       <button onClick={(e) => { e.stopPropagation(); db.deleteNovel(item.id).then(loadNovels); }} className="text-slate-200 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={16}/></button>
                     </div>
                     <h4 className="font-black text-xl mb-3 text-slate-800 line-clamp-1">{item.title}</h4>
-                    <p className="text-xs text-slate-400 line-clamp-4 leading-relaxed">{item.generatedPremise || item.premise || "Empty Canvas..."}</p>
+                    <p className="text-xs text-slate-400 line-clamp-4 leading-relaxed">{item.generatedPremise || item.premise || "No premise yet..."}</p>
                     {item.isR18 && <div className="absolute bottom-6 right-6 text-red-100 opacity-20"><Flame size={48}/></div>}
                   </div>
                 ))}
@@ -358,9 +391,9 @@ const App: React.FC = () => {
             {step === 'ideate' && (
               <div className="bg-white p-12 rounded-[3.5rem] shadow-xl space-y-12 animate-in slide-in-from-bottom-4">
                 <div className="flex justify-between items-center">
-                  <h2 className="text-2xl font-black uppercase tracking-widest">Ideation Lab</h2>
+                  <h2 className="text-2xl font-black uppercase tracking-widest">Ideation</h2>
                   <div className="flex items-center gap-3 bg-slate-50 p-2 rounded-xl border">
-                    <span className={`text-[9px] font-black uppercase ${novel.isR18 ? 'text-red-500' : 'text-slate-400'}`}>Sensory Protocol (R18)</span>
+                    <span className={`text-[9px] font-black uppercase ${novel.isR18 ? 'text-red-500' : 'text-slate-400'}`}>R18 MODE</span>
                     <button onClick={() => setNovel({...novel, isR18: !novel.isR18})} className={`w-12 h-6 rounded-full relative transition-all ${novel.isR18 ? 'bg-red-500 shadow-md' : 'bg-slate-200'}`}>
                       <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${novel.isR18 ? 'left-7' : 'left-1'}`} />
                     </button>
@@ -369,42 +402,26 @@ const App: React.FC = () => {
                 
                 <div className="space-y-10">
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Manuscript Title</label>
-                    <input type="text" value={novel.title} onChange={e => setNovel({...novel, title: e.target.value})} className="w-full text-2xl font-black bg-slate-50 p-6 rounded-3xl outline-none focus:ring-2 ring-indigo-100 transition-all" placeholder="The Echoes of Aethelgard..." />
-                  </div>
-
-                  <div className="space-y-4">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-2">
-                      <Tags size={14} className="text-indigo-500"/> Sub-Genre Selection
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                      {SUB_GENRES.map(tag => {
-                        const isSelected = (novel.subGenres || []).includes(tag);
-                        return (
-                          <button 
-                            key={tag} 
-                            onClick={() => toggleIdeationTag('subGenres', tag)}
-                            className={`px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider transition-all border flex items-center gap-1.5 ${
-                              isSelected 
-                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' 
-                                : 'bg-slate-50 text-slate-400 border-slate-100 hover:border-indigo-200 hover:text-indigo-400'
-                            }`}
-                          >
-                            {isSelected && <Check size={10}/>}
-                            {tag}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Novel Title</label>
+                    <input type="text" value={novel.title} onChange={e => setNovel({...novel, title: e.target.value})} className="w-full text-2xl font-black bg-slate-50 p-6 rounded-3xl outline-none focus:ring-2 ring-indigo-100 transition-all" placeholder="Enter title..." />
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">The Core Spark (Premise)</label>
-                    <textarea value={novel.premise} onChange={e => setNovel({...novel, premise: e.target.value})} className="w-full h-48 bg-slate-50 p-8 rounded-[2.5rem] outline-none text-lg resize-none shadow-inner focus:bg-white transition-all" placeholder="Describe the heart of the story..." />
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Premise / Plot Spark</label>
+                    <textarea value={novel.premise} onChange={e => setNovel({...novel, premise: e.target.value})} className="w-full h-48 bg-slate-50 p-8 rounded-[2.5rem] outline-none text-lg resize-none shadow-inner focus:bg-white transition-all" placeholder="Explain your core idea..." />
                   </div>
 
-                  <button onClick={handleGenerateOutline} disabled={loading || !providerReady} className="w-full bg-slate-900 text-white py-6 rounded-3xl font-black uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-xl disabled:opacity-50 flex items-center justify-center gap-3">
-                    <Cpu size={20}/> {loading ? 'Architecting...' : 'Construct Outline'}
+                  <button 
+                    onClick={handleGenerateOutline} 
+                    disabled={loading} 
+                    className={`w-full py-6 rounded-3xl font-black uppercase tracking-widest transition-all shadow-xl flex items-center justify-center gap-3 ${
+                      !isProviderReady() 
+                      ? 'bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100' 
+                      : 'bg-slate-900 text-white hover:bg-indigo-600'
+                    }`}
+                  >
+                    <Cpu size={20}/> 
+                    {loading ? 'Architecting...' : (isProviderReady() ? 'Construct Outline' : 'Setup Required to Continue')}
                   </button>
                 </div>
               </div>
@@ -413,86 +430,66 @@ const App: React.FC = () => {
             {step === 'style' && (
               <div className="space-y-8 animate-in fade-in">
                 <div className="flex justify-between items-end">
-                  <h2 className="text-3xl font-black">Casting Office</h2>
+                  <h2 className="text-3xl font-black">Characters</h2>
                   <button onClick={() => {
                     const newChars = [...novel.characters, createDefaultCharacter()];
                     setNovel({...novel, characters: newChars});
                     setExpandedCharacters(new Set(expandedCharacters).add(newChars.length - 1));
-                  }} className="bg-indigo-600 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase shadow-lg hover:bg-indigo-700 transition flex items-center gap-2"><UserPlus size={16}/> Add Talent</button>
+                  }} className="bg-indigo-600 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase shadow-lg hover:bg-indigo-700 transition flex items-center gap-2"><UserPlus size={16}/> Add Character</button>
                 </div>
                 <div className="grid grid-cols-1 gap-4">
                   {novel.characters.map((c: any, i: number) => {
-                    const isExpanded = expandedCharacters.has(i);
+                    const expanded = expandedCharacters.has(i);
                     return (
-                      <div key={i} className={`bg-white rounded-[2rem] border transition-all duration-300 overflow-hidden shadow-sm hover:shadow-md ${isExpanded ? 'ring-2 ring-indigo-50 shadow-xl' : ''}`}>
+                      <div key={i} className={`bg-white rounded-[2rem] border transition-all duration-300 overflow-hidden ${expanded ? 'shadow-xl ring-2 ring-indigo-50' : 'shadow-sm'}`}>
                         <div onClick={() => toggleExpand(i)} className="p-6 flex items-center gap-4 cursor-pointer hover:bg-slate-50 transition-colors group">
                           <div className="w-12 h-12 bg-slate-100 rounded-xl border flex items-center justify-center overflow-hidden shrink-0">
                             {c.imageUrl ? <img src={c.imageUrl} className="w-full h-full object-cover"/> : <UserIcon size={20} className="text-slate-300"/>}
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <h4 className={`font-black text-sm uppercase tracking-wider truncate ${isExpanded ? 'text-indigo-600' : 'text-slate-700'}`}>
-                              {c.name || "Untitled Character"}
-                            </h4>
-                            <div className="flex gap-4 mt-1">
-                              <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-1"><Wind size={10}/> {c.personality?.length || 0} Traits</span>
-                              <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-1"><MessageSquare size={10}/> {c.dialogueStyles?.length || 0} Styles</span>
-                            </div>
+                          <div className="flex-1">
+                            <h4 className="font-black text-sm uppercase tracking-wider text-slate-700">{c.name || "Unnamed"}</h4>
+                            <p className="text-[9px] font-black uppercase text-slate-400">{c.personality?.join(', ') || 'No traits yet'}</p>
                           </div>
-                          <div className="flex items-center gap-4">
-                            <button onClick={(e) => { e.stopPropagation(); const nc = [...novel.characters]; nc.splice(i, 1); setNovel({...novel, characters: nc}); }} className="text-slate-200 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={16}/></button>
-                            {isExpanded ? <ChevronUp className="text-slate-300" size={20}/> : <ChevronDown className="text-slate-300" size={20}/>}
-                          </div>
+                          <button onClick={(e) => { e.stopPropagation(); const nc = [...novel.characters]; nc.splice(i, 1); setNovel({...novel, characters: nc}); }} className="text-slate-200 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all p-2"><Trash2 size={16}/></button>
+                          {expanded ? <ChevronUp size={20}/> : <ChevronDown size={20}/>}
                         </div>
 
-                        {isExpanded && (
-                          <div className="p-8 border-t border-slate-50 space-y-8 animate-in slide-in-from-top-2 duration-300">
-                            <div className="flex flex-col md:flex-row gap-8">
-                              <div className="flex gap-6 items-start">
-                                <div className="w-32 h-32 bg-slate-50 rounded-[2rem] border flex items-center justify-center overflow-hidden relative group/portrait shadow-inner shrink-0">
+                        {expanded && (
+                          <div className="p-8 border-t border-slate-50 space-y-8 animate-in slide-in-from-top-2">
+                             <div className="flex flex-col md:flex-row gap-8">
+                                <div className="w-32 h-32 bg-slate-50 rounded-2xl border flex items-center justify-center overflow-hidden group/port relative">
                                   {c.imageUrl ? <img src={c.imageUrl} className="w-full h-full object-cover"/> : <UserIcon size={40} className="text-slate-200"/>}
-                                  <button onClick={() => handlePortrait(i)} className="absolute inset-0 bg-indigo-600/60 opacity-0 group-hover/portrait:opacity-100 flex items-center justify-center text-white transition-all"><Palette size={24}/></button>
+                                  <button onClick={() => handlePortrait(i)} className="absolute inset-0 bg-indigo-600/60 opacity-0 group-hover/port:opacity-100 flex items-center justify-center text-white transition-all"><Palette size={24}/></button>
                                 </div>
-                                <div className="flex-1 space-y-3">
-                                  <input value={c.name} onChange={e => updateCharacterField(i, 'name', e.target.value)} className="font-black text-2xl w-full bg-transparent outline-none focus:text-indigo-600 transition-colors" placeholder="Character Name"/>
-                                  <textarea value={c.description} onChange={e => updateCharacterField(i, 'description', e.target.value)} className="text-sm text-slate-500 w-full h-20 bg-transparent outline-none resize-none custom-scrollbar font-medium" placeholder="Role, drive, and essence..."/>
+                                <div className="flex-1 space-y-4">
+                                  <input value={c.name} onChange={e => updateCharacterField(i, 'name', e.target.value)} className="font-black text-2xl w-full bg-transparent outline-none" placeholder="Name..."/>
+                                  <textarea value={c.description} onChange={e => updateCharacterField(i, 'description', e.target.value)} className="w-full bg-slate-50 p-4 rounded-2xl outline-none resize-none text-sm h-24" placeholder="Character bio..."/>
                                 </div>
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                              <div className="space-y-3">
-                                <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-2"><Wind size={12}/> Personality</label>
-                                <div className="flex flex-wrap gap-2">
-                                  {PERSONALITY_TRAITS.map(trait => {
-                                    const isSelected = (c.personality || []).includes(trait);
-                                    return (
-                                      <button key={trait} onClick={() => {
-                                        const nc = [...novel.characters];
-                                        const cur = nc[i].personality || [];
-                                        nc[i].personality = cur.includes(trait) ? cur.filter((t: any) => t !== trait) : [...cur, trait];
-                                        setNovel({...novel, characters: nc});
-                                      }} className={`px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider transition-all border flex items-center gap-1.5 ${isSelected ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-400 border-slate-100 hover:border-indigo-200'}`}>{isSelected && <Check size={10}/>}{trait}</button>
-                                    );
-                                  })}
+                             </div>
+                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                <div className="space-y-3">
+                                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Personality Traits</label>
+                                  <div className="flex flex-wrap gap-2">
+                                    {PERSONALITY_TRAITS.map(t => {
+                                      const isSelected = (c.personality || []).includes(t);
+                                      return (
+                                        <button key={t} onClick={() => toggleTrait(i, t)} className={`px-4 py-2 rounded-full text-[9px] font-black uppercase border transition-all ${isSelected ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-400 border-slate-100'}`}>{t}</button>
+                                      );
+                                    })}
+                                  </div>
                                 </div>
-                              </div>
-                              <div className="space-y-3">
-                                <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-2"><MessageSquare size={12}/> Dialogue Style</label>
-                                <div className="flex flex-wrap gap-2">
-                                  {DIALOGUE_STYLES.map(style => {
-                                    const isSelected = (c.dialogueStyles || []).includes(style);
-                                    return (
-                                      <button key={style} onClick={() => {
-                                        const nc = [...novel.characters];
-                                        const cur = nc[i].dialogueStyles || [];
-                                        nc[i].dialogueStyles = cur.includes(style) ? cur.filter((s: any) => s !== style) : [...cur, style];
-                                        setNovel({...novel, characters: nc});
-                                      }} className={`px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider transition-all border flex items-center gap-1.5 ${isSelected ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-400 border-slate-100 hover:border-indigo-200'}`}>{isSelected && <Check size={10}/>}{style}</button>
-                                    );
-                                  })}
+                                <div className="space-y-3">
+                                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Dialogue Styles</label>
+                                  <div className="flex flex-wrap gap-2">
+                                    {DIALOGUE_STYLES.map(s => {
+                                      const isSelected = (c.dialogueStyles || []).includes(s);
+                                      return (
+                                        <button key={s} onClick={() => toggleDialogueStyle(i, s)} className={`px-4 py-2 rounded-full text-[9px] font-black uppercase border transition-all ${isSelected ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-400 border-slate-100'}`}>{s}</button>
+                                      );
+                                    })}
+                                  </div>
                                 </div>
-                              </div>
-                            </div>
+                             </div>
                           </div>
                         )}
                       </div>
@@ -503,27 +500,32 @@ const App: React.FC = () => {
             )}
 
             {step === 'write' && (
-              <div className="flex flex-col xl:flex-row gap-8 h-[80vh] animate-in slide-in-from-right-4">
+              <div className="flex flex-col gap-8 h-[80vh] animate-in slide-in-from-right-4">
                 <div className="flex-1 bg-white rounded-[3.5rem] border shadow-2xl flex flex-col overflow-hidden relative">
                   <div className="p-8 border-b bg-slate-50/50 flex flex-col md:flex-row justify-between items-center gap-4">
                     <div className="flex items-center gap-4">
                       <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center font-black text-xs shadow-md">{activeChapter + 1}</div>
-                      <h3 className="font-black text-lg truncate max-w-xs">{novel.outline[activeChapter] || "Prologue"}</h3>
+                      <h3 className="font-black text-lg truncate max-w-xs">{novel.outline[activeChapter] || "Unnamed Section"}</h3>
                     </div>
                     <button 
                       onClick={() => handleDraft(activeChapter)} 
                       disabled={loading} 
                       className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 transition-all shadow-lg active:scale-95 ${
-                        (!providerReady || novel.outline.length === 0) 
-                          ? 'bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100' 
+                        (!isProviderReady() || novel.outline.length === 0) 
+                          ? 'bg-amber-50 text-amber-600 border border-amber-200' 
                           : 'bg-indigo-600 text-white hover:bg-indigo-700'
                       }`}
                     >
-                      <Zap size={14} className={!providerReady ? 'text-amber-400' : ''}/> 
-                      {novel.outline.length === 0 ? 'Needs Outline' : (providerReady ? 'AI Draft' : 'Setup Required')}
+                      <Zap size={14}/> 
+                      {novel.outline.length === 0 ? 'Needs Outline' : (isProviderReady() ? 'Draft' : 'Setup Required')}
                     </button>
                   </div>
-                  <textarea value={novel.chapters[activeChapter] || ""} onChange={e => setNovel({...novel, chapters: {...novel.chapters, [activeChapter]: e.target.value}})} className="flex-1 p-12 text-xl leading-relaxed outline-none font-serif font-medium resize-none selection:bg-indigo-100 custom-scrollbar" placeholder="The prose begins here..." />
+                  <textarea 
+                    value={novel.chapters[activeChapter] || ""} 
+                    onChange={e => setNovel({...novel, chapters: {...novel.chapters, [activeChapter]: e.target.value}})} 
+                    className="flex-1 p-12 text-xl leading-relaxed outline-none font-serif font-medium resize-none custom-scrollbar" 
+                    placeholder="The story begins..." 
+                  />
                   <div className="p-8 border-t bg-slate-50/50 flex justify-between gap-4">
                     <button onClick={() => setActiveChapter(Math.max(0, activeChapter - 1))} disabled={activeChapter === 0} className="px-6 py-3 bg-white border rounded-xl text-[10px] font-black uppercase disabled:opacity-30">Prev Beat</button>
                     <button onClick={() => setActiveChapter(Math.min(novel.outline.length-1, activeChapter + 1))} disabled={activeChapter >= novel.outline.length - 1 || novel.outline.length === 0} className="px-6 py-3 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase disabled:opacity-30">Next Beat</button>
@@ -535,8 +537,8 @@ const App: React.FC = () => {
             {step === 'storyboard' && (
               <div className="space-y-8 animate-in zoom-in-95">
                 <div className="flex justify-between items-end">
-                  <h2 className="text-3xl font-black">Moodboard</h2>
-                  <button onClick={handleMoodboard} disabled={!providerReady} className="bg-indigo-600 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase shadow-lg hover:bg-indigo-700 transition disabled:opacity-50">Visualize Scene</button>
+                  <h2 className="text-3xl font-black">Storyboard</h2>
+                  <button onClick={handleMoodboard} disabled={!isProviderReady()} className="bg-indigo-600 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase shadow-lg disabled:opacity-50">Generate Visual</button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {novel.storyboard?.map((s: any) => (
@@ -557,22 +559,34 @@ const App: React.FC = () => {
             <div className="p-6 border-b bg-slate-900 text-white flex justify-between items-center">
               <div className="flex items-center gap-2">
                 <Search size={16} className="text-indigo-400"/>
-                <h3 className="font-black uppercase tracking-widest text-[10px]">Architect Consultant</h3>
+                <h3 className="font-black uppercase tracking-widest text-[10px]">Architect Bot</h3>
               </div>
               <button onClick={() => setShowConsultant(false)} className="hover:text-indigo-400 transition-colors"><X size={20}/></button>
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50 custom-scrollbar">
               {chatHistory.map((m, i) => (
                 <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[85%] p-4 rounded-3xl text-xs leading-relaxed shadow-sm ${m.role === 'user' ? 'bg-indigo-600 text-white ml-4' : 'bg-white border text-slate-700 mr-4'}`}>
+                  <div className={`max-w-[85%] p-4 rounded-3xl text-xs leading-relaxed shadow-sm ${m.role === 'user' ? 'bg-indigo-600 text-white' : 'bg-white border text-slate-700'}`}>
                     {m.text}
+                    {/* Render grounding sources if available as required by Gemini API guidelines */}
+                    {m.links && m.links.length > 0 && (
+                      <div className="mt-4 pt-4 border-t border-slate-100 flex flex-col gap-2">
+                        <p className="text-[9px] font-black uppercase text-slate-400">Sources</p>
+                        {m.links.map((link: any, li: number) => (
+                          <a key={li} href={link.uri} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 transition-colors group/link">
+                            <ExternalLink size={10}/>
+                            <span className="truncate group-hover/link:underline text-[10px]">{link.title}</span>
+                          </a>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
             </div>
             <div className="p-6 border-t bg-white flex gap-2">
-              <input value={chatInput} disabled={!providerReady} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleConsult()} className="flex-1 bg-slate-50 p-4 rounded-2xl outline-none text-xs border border-transparent focus:border-indigo-100 transition-all" placeholder="Ask plotting advice..." />
-              <button onClick={handleConsult} disabled={!providerReady || !chatInput.trim()} className="p-4 bg-slate-900 text-white rounded-2xl hover:bg-indigo-600 transition-all shadow-lg disabled:opacity-50"><Send size={18}/></button>
+              <input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleConsult()} className="flex-1 bg-slate-50 p-4 rounded-2xl outline-none text-xs border focus:border-indigo-100" placeholder="Ask anything..." />
+              <button onClick={handleConsult} disabled={!chatInput.trim()} className="p-4 bg-slate-900 text-white rounded-2xl hover:bg-indigo-600 transition-all shadow-lg"><Send size={18}/></button>
             </div>
           </aside>
         )}
